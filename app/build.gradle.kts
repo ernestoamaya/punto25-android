@@ -84,7 +84,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.core:core-ktx:1.17.0")
 
-    implementation("com.google.maps.android:maps-compose:8.3.0")
+    implementation("com.google.maps.android:maps-compose:8.6.0")
     implementation("com.google.android.gms:play-services-location:21.4.0")
 
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
