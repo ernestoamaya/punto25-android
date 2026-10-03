@@ -1,0 +1,13 @@
+# Punto25 code ownership
+* @ernestoamaya
+
+# Security-sensitive project metadata
+/.github/ @ernestoamaya
+/CODEOWNERS @ernestoamaya
+/SECURITY.md @ernestoamaya
+/LICENSE @ernestoamaya
+/COPYRIGHT.md @ernestoamaya
+
+# Build and signing configuration
+/*.gradle.kts @ernestoamaya
+/app/build.gradle.kts @ernestoamaya

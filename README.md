@@ -47,7 +47,7 @@ Client-side source code must never be treated as a security boundary. Production
 
 Open the project with a current Android Studio/JDK 17 environment and allow Gradle to resolve dependencies.
 
-Configuration values can be supplied through Gradle properties or environment variables where supported, including:
+Service/configuration values can be supplied through Gradle properties or environment variables where supported, including:
 
 - `MAPS_API_KEY`
 - `FIREBASE_API_KEY`
@@ -57,6 +57,8 @@ Configuration values can be supplied through Gradle properties or environment va
 - `PUNTO25_API_BASE_URL`
 - `WHATSAPP_VERIFY_NUMBER`
 
+Owner-controlled Alpha builds additionally use private GitHub Secrets for the rotated signing key and `ALPHA_ADMIN_PIN`. The Admin PIN is intentionally absent from public source; an ordinary build with no `ALPHA_ADMIN_PIN` has local Administration disabled. This Alpha mechanism is not a production authorization boundary and will be replaced by authenticated backend RBAC.
+
 Do not commit local credentials, private keys, keystores, service-account files or production secrets.
 
 CI validates the project with:
@@ -65,6 +67,8 @@ CI validates the project with:
 :app:testDebugUnitTest
 :app:assembleDebug
 ```
+
+The manual `Alpha APK` workflow is main-only, requires the private Alpha signing configuration, verifies the APK signature and publishes the APK together with its SHA-256 checksum.
 
 ## Development workflow
 
@@ -82,9 +86,9 @@ GitHub Actions is used as CI validation, not as an iterative patch-application m
 
 ## Security
 
-Read `SECURITY.md` before reporting vulnerabilities or handling sensitive configuration.
+Read `SECURITY.md` and `SECURITY_AUDIT.md` before reporting vulnerabilities or handling sensitive configuration.
 
-The repository must not contain production signing material or backend secrets.
+The repository must not contain production signing material or backend secrets. `PUBLICATION_CHECKLIST.md` tracks the remaining controls before public visibility.
 
 ## Copyright and usage
 

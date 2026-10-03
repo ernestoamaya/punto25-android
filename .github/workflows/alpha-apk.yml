@@ -1,0 +1,107 @@
+name: Alpha APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpha-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signed-alpha-apk:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ALPHA_KEYSTORE_PASSWORD: ${{ secrets.ALPHA_KEYSTORE_PASSWORD }}
+      ALPHA_KEY_ALIAS: ${{ secrets.ALPHA_KEY_ALIAS }}
+      ALPHA_KEY_PASSWORD: ${{ secrets.ALPHA_KEY_PASSWORD }}
+      ALPHA_ADMIN_PIN: ${{ secrets.ALPHA_ADMIN_PIN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Java 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - name: Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: '9.3.1'
+          cache-provider: basic
+
+      - name: Validate private Alpha configuration
+        shell: bash
+        env:
+          ALPHA_KEYSTORE_B64: ${{ secrets.ALPHA_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ALPHA_KEYSTORE_B64" ] || [ -z "$ALPHA_KEYSTORE_PASSWORD" ] || [ -z "$ALPHA_KEY_ALIAS" ] || [ -z "$ALPHA_KEY_PASSWORD" ]; then
+            echo "Stable Alpha signing secrets are not configured." >&2
+            exit 1
+          fi
+          if ! [[ "$ALPHA_ADMIN_PIN" =~ ^[0-9]{6,8}$ ]]; then
+            echo "ALPHA_ADMIN_PIN must be a private 6-8 digit PIN." >&2
+            exit 1
+          fi
+          KEYSTORE_PATH="$RUNNER_TEMP/punto25-alpha.jks"
+          printf '%s' "$ALPHA_KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          echo "ALPHA_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+      - name: Resolve app version
+        id: app_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_NAME="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          if [ -z "$VERSION_NAME" ]; then
+            echo "Unable to resolve versionName." >&2
+            exit 1
+          fi
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Unit tests and signed debug build
+        env:
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          PUNTO25_API_BASE_URL: ${{ secrets.PUNTO25_API_BASE_URL }}
+          WHATSAPP_VERIFY_NUMBER: ${{ secrets.WHATSAPP_VERIFY_NUMBER }}
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify signature and prepare artifact
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.app_version.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          OUT="Punto25-v${VERSION_NAME}-debug.apk"
+          apksigner verify --verbose "$APK"
+          cp "$APK" "$OUT"
+          sha256sum "$OUT" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload Alpha APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Punto25-v${{ steps.app_version.outputs.version_name }}-debug
+          path: |
+            Punto25-v${{ steps.app_version.outputs.version_name }}-debug.apk
+            SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,48 @@
+# Gradle / Android
+.gradle/
+build/
+**/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Signing / credentials
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+*.crt
+*.der
+*.mobileprovision
+keystore.properties
+signing.properties
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+secrets.properties
+google-services.json
+service-account*.json
+*serviceAccount*.json
+
+# Build outputs
+*.apk
+*.aab
+*.apks
+
+# Logs / temporary files
+*.log
+*.tmp
+*.swp
+*~
