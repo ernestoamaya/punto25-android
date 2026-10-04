@@ -91,7 +91,12 @@ jobs:
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           OUT="Punto25-v${VERSION_NAME}-debug.apk"
-          apksigner verify --verbose "$APK"
+          APKSIGNER="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/build-tools/36.0.0/apksigner"
+          if [ ! -x "$APKSIGNER" ]; then
+            echo "apksigner not found at expected path: $APKSIGNER" >&2
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose "$APK"
           cp "$APK" "$OUT"
           sha256sum "$OUT" > SHA256SUMS.txt
           cat SHA256SUMS.txt
