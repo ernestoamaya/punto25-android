@@ -1,0 +1,46 @@
+name: Tanda 2B Clean Validation
+
+on:
+  push:
+    branches: [ "tanda2b-clean-ci" ]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact clean Tanda 2B HEAD
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: d2ae56be241fd169912b010dfe2b18fe815517e9
+
+      - name: Java 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - name: Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: '9.3.1'
+          cache-provider: basic
+
+      - name: Focused regression
+        run: >-
+          gradle :app:testDebugUnitTest
+          --tests "ar.com.mandados.app.TipTransferPolicyTest"
+          --tests "ar.com.mandados.app.PaymentTransferPolicyTest"
+          --tests "ar.com.mandados.app.CustomerOrderOwnershipTest"
+          --stacktrace --no-daemon
+
+      - name: Full unit regression lint and debug build
+        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace --no-daemon
