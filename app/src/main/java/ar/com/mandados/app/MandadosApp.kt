@@ -157,7 +157,10 @@ private fun MandadosNavigation(controller: MandadosController) {
             Screen.ADMIN -> Screen.HOME
             Screen.ADMIN_ORDERS, Screen.ADMIN_REPORTS, Screen.ADMIN_SHIFTS, Screen.ADMIN_PAYMENTS, Screen.ADMIN_LEGAL, Screen.RIDERS -> Screen.ADMIN
             Screen.ADMIN_ORDER_DETAIL -> Screen.ADMIN_ORDERS
-            Screen.RIDER_WORKSPACE -> if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+            Screen.RIDER_WORKSPACE -> {
+                controller.logoutRider()
+                if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+            }
             Screen.LOCATION_PICKER -> parentForMap(mapTarget)
             Screen.HOME, Screen.REGISTER -> screen
         }
@@ -285,7 +288,10 @@ private fun MandadosNavigation(controller: MandadosController) {
         Screen.RIDER_WORKSPACE -> RiderDashboardScreen(
             controller,
             selectedRiderId,
-            onBack = { screen = if (riderStandalone) Screen.REGISTER else Screen.RIDERS }
+            onBack = {
+                controller.logoutRider()
+                screen = if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+            }
         )
         Screen.LOCATION_PICKER -> LocationPickerScreen(
             controller,
@@ -1353,6 +1359,31 @@ private fun OrderDetailScreen(c: MandadosController, id: String?, onBack: () -> 
     if (payment.status == PaymentStatus.IN_REVIEW) AssistBox("Transferencia en revisión · el Repartidor todavía no visualiza la acreditación.")
     if (!payment.proofUri.isNullOrBlank()) Text("Comprobante adjunto a este pedido.")
     if (payment.status == PaymentStatus.CONFIRMED) AssistBox("Pago confirmado por el Repartidor.")
+                }
+            }
+
+            val digitalTip = if (o.operationMode == OperationMode.MULTI_RIDER) c.customerDigitalTipForOrder(o.id) else null
+            if (digitalTip != null) {
+                Spacer(Modifier.height(12.dp))
+                Text("Propina por transferencia", fontWeight = FontWeight.Bold)
+                Text("Importe: ${moneyNullable(digitalTip.tipAmount)}")
+                val tipRider = c.rider(o.assignedRiderId)
+                val tipAlias = tipRider?.transferAlias.orEmpty().ifBlank { c.config.paymentConfig.centralAlias }
+                if (tipAlias.isNotBlank()) {
+                    Text("Alias: $tipAlias", color = MaterialTheme.colorScheme.primary)
+                }
+                when (digitalTip.tipStatus) {
+                    TipStatus.SELECTED -> {
+                        AssistBox("La propina es una transferencia adicional separada del pago principal.")
+                        OutlinedButton(
+                            onClick = { c.declareTipTransfer(o.id) },
+                            enabled = c.customerCanDeclareTipTransfer(o.id),
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                        ) { Text("YA TRANSFERÍ LA PROPINA") }
+                    }
+                    TipStatus.TRANSFER_DECLARED -> AssistBox("Transferencia de propina informada · pendiente de confirmación del Repartidor.")
+                    TipStatus.CONFIRMED -> AssistBox("Propina confirmada por el Repartidor.")
+                    TipStatus.NONE -> Unit
                 }
             }
 

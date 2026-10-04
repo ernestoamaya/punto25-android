@@ -892,16 +892,26 @@ private fun RiderHistory(c: MandadosController, rider: RiderProfile) {
             val rating = c.ratings.firstOrNull { it.orderId == order.id }
             if (rating != null) {
                 ReportMetric("Calificación", "${rating.stars}/5")
-                if (rating.tipAmount > 0) {
-                    ReportMetric("Propina informada", money(rating.tipAmount))
-                    if (rating.tipStatus == TipStatus.SELECTED) {
-                        Button(
-                            onClick = { c.confirmTip(order.id) },
-                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
-                        ) { Text("CONFIRMAR PROPINA RECIBIDA") }
-                    } else if (rating.tipStatus == TipStatus.CONFIRMED) {
-                        Text("Propina confirmada", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                    }
+            }
+            val digitalTip = c.riderDigitalTipForOrder(order.id, rider.id)
+            if (digitalTip != null) {
+                ReportMetric("Propina por transferencia", money(digitalTip.tipAmount))
+                when (digitalTip.tipStatus) {
+                    TipStatus.SELECTED -> Text(
+                        "Propina elegida · esperando que el Cliente informe la transferencia.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    TipStatus.TRANSFER_DECLARED -> Button(
+                        onClick = { c.confirmTip(order.id, rider.id) },
+                        enabled = c.riderCanConfirmTip(order.id, rider.id),
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                    ) { Text("CONFIRMAR ACREDITACIÓN DE PROPINA") }
+                    TipStatus.CONFIRMED -> Text(
+                        "Propina confirmada",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    TipStatus.NONE -> Unit
                 }
             }
             OrderTimeline(c, order)
@@ -916,18 +926,19 @@ private fun RiderPendingTips(c: MandadosController, rider: RiderProfile) {
         AssistCard("No tenés propinas pendientes de confirmar.")
         return
     }
-    AssistCard("Confirmá únicamente las propinas que realmente recibiste. Una vez confirmadas se incorporan a tu balance.")
+    AssistCard("Confirmá sólo cuando verifiques la acreditación de la transferencia adicional. Al confirmarla se incorpora al balance.")
     items.forEach { rating ->
         val order = c.order(rating.orderId)
         Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
             Column(Modifier.padding(12.dp)) {
                 Text(rating.orderId, fontWeight = FontWeight.Bold)
                 Text(order?.createdAt ?: rating.createdAt, style = MaterialTheme.typography.bodySmall)
-                ReportMetric("Propina informada", money(rating.tipAmount), true)
+                ReportMetric("Propina transferida informada", money(rating.tipAmount), true)
                 Button(
-                    onClick = { c.confirmTip(rating.orderId) },
+                    onClick = { c.confirmTip(rating.orderId, rider.id) },
+                    enabled = c.riderCanConfirmTip(rating.orderId, rider.id),
                     modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
-                ) { Text("CONFIRMAR PROPINA RECIBIDA") }
+                ) { Text("CONFIRMAR ACREDITACIÓN DE PROPINA") }
             }
         }
     }
@@ -940,11 +951,7 @@ private fun RiderBalance(c: MandadosController, rider: RiderProfile) {
     var toDate by rememberSaveable { mutableStateOf(defaultReportTo()) }
     val orders = filterOrdersForPeriod(c.riderCompletedOrders(rider.id), fromDate, toDate)
         .sortedByDescending { parseOrderTime(it.createdAt) ?: LocalDateTime.MIN }
-    val total = orders.sumOf { it.totalAmount ?: 0 } +
-        c.ratings.filter { rating ->
-            rating.riderId == rider.id && rating.tipStatus == TipStatus.CONFIRMED &&
-                orders.any { it.id == rating.orderId }
-        }.sumOf { it.tipAmount }
+    val total = c.riderBalanceForOrders(rider.id, orders)
 
     DateRangePicker(fromDate, toDate, { if (it != null) fromDate = it }, { if (it != null) toDate = it })
     Button(
@@ -967,7 +974,7 @@ private fun RiderBalance(c: MandadosController, rider: RiderProfile) {
                 Text(order.id, fontWeight = FontWeight.Bold)
                 Text(order.createdAt)
                 MoneyBreakdown(order)
-                val tip = c.ratings.firstOrNull { it.orderId == order.id && it.tipStatus == TipStatus.CONFIRMED }?.tipAmount ?: 0
+                val tip = c.confirmedDigitalTipAmountForOrder(order.id, rider.id)
                 if (tip > 0) ReportMetric("Propina recibida", money(tip))
                 ReportMetric("Tiempo", c.deliveryDurationSeconds(order)?.let(::formatDuration) ?: "Sin datos")
             }
@@ -1004,7 +1011,7 @@ private fun RiderBalances(c: MandadosController, rider: RiderProfile) {
                 Column(Modifier.padding(12.dp)) {
                     Text(day, fontWeight = FontWeight.Bold)
                     Text("${dayOrders.size} pedido(s)")
-                    Text("Total: ${money(dayOrders.sumOf { it.totalAmount ?: 0 })}")
+                    Text("Total: ${money(c.riderBalanceForOrders(rider.id, dayOrders))}")
                     Text("Promedio: ${c.averageDeliverySeconds(dayOrders)?.let(::formatDuration) ?: "Sin datos"}")
                     Text("Tocar para ver pedidos", color = MaterialTheme.colorScheme.primary)
                 }
@@ -1020,6 +1027,8 @@ private fun RiderBalances(c: MandadosController, rider: RiderProfile) {
                     Text(order.createdAt)
                     Text(categoryText(order.category))
                     MoneyBreakdown(order)
+                    val tip = c.confirmedDigitalTipAmountForOrder(order.id, rider.id)
+                    if (tip > 0) ReportMetric("Propina recibida", money(tip))
                     ReportMetric("Tiempo", c.deliveryDurationSeconds(order)?.let(::formatDuration) ?: "Sin datos")
                 }
             }
@@ -2357,6 +2366,8 @@ private fun eventLabel(e: OrderEvent) = when (e.type) {
     OrderEventType.PAYMENT_PROOF_ATTACHED -> "Comprobante de transferencia adjunto"
     OrderEventType.PAYMENT_CONFIRMED -> "Pago confirmado por Repartidor"
     OrderEventType.PAYMENT_REVIEW_REQUESTED -> "Transferencia en revisión"
+    OrderEventType.TIP_TRANSFER_DECLARED -> "Transferencia de propina informada"
+    OrderEventType.TIP_TRANSFER_CONFIRMED -> "Propina confirmada por Repartidor"
     OrderEventType.RATING_SUBMITTED -> "Calificación recibida"
 }
 
@@ -2372,7 +2383,9 @@ private fun eventColor(type: OrderEventType) = when (type) {
     OrderEventType.PAYMENT_DECLARED,
     OrderEventType.PAYMENT_PROOF_ATTACHED,
     OrderEventType.PAYMENT_CONFIRMED,
-    OrderEventType.PAYMENT_REVIEW_REQUESTED -> Color(0xFFF59E0B)
+    OrderEventType.PAYMENT_REVIEW_REQUESTED,
+    OrderEventType.TIP_TRANSFER_DECLARED,
+    OrderEventType.TIP_TRANSFER_CONFIRMED -> Color(0xFFF59E0B)
     OrderEventType.RATING_SUBMITTED -> Color(0xFFEAB308)
 }
 
@@ -2600,8 +2613,9 @@ internal fun Punto25RatingDialog(c: MandadosController, order: LocalOrder) {
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                if (c.config.paymentConfig.tipsEnabled) {
-                    SectionTitle("Propina opcional")
+                val digitalTipEnabled = c.canOfferDigitalTip(order)
+                if (digitalTipEnabled) {
+                    SectionTitle("Propina opcional por transferencia")
                     FilterChip(tip == 0 && customTip.isBlank(), {
                         tip = 0; customTip = ""
                     }, { Text("Sin propina") })
@@ -2627,8 +2641,10 @@ internal fun Punto25RatingDialog(c: MandadosController, order: LocalOrder) {
                         )
                     }
                     if (tip > 0) {
-                        AssistCard("La propina queda registrada como opcional. Hasta conectar la pasarela, su recepción deberá confirmarse por el medio de pago utilizado.")
+                        AssistCard("La propina se transfiere por separado del pago principal. Después de enviar la calificación, realizá la transferencia adicional y marcala en el detalle del pedido.")
                     }
+                } else if (c.config.paymentConfig.tipsEnabled && order.deliveryPayment == DeliveryPaymentMethod.CASH) {
+                    AssistCard("Si querés dejar una propina en efectivo, entregala directamente al Repartidor. Punto25 no la registra ni la incorpora al balance digital.")
                 }
             }
         },
