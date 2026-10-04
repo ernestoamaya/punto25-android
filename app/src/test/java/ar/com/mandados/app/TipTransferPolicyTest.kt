@@ -134,6 +134,12 @@ class TipTransferPolicyTest {
         assertFalse(isDigitalTipRecord(order(payment = DeliveryPaymentMethod.CASH), rating(TipStatus.CONFIRMED)))
     }
 
+    @Test fun `REG-PAY-TIP-016 authenticated Rider identity must match claimed actor`() {
+        assertTrue(riderActorMatchesAuthenticatedSession("RID-A", "RID-A"))
+        assertFalse(riderActorMatchesAuthenticatedSession(null, "RID-A"))
+        assertFalse(riderActorMatchesAuthenticatedSession("RID-B", "RID-A"))
+    }
+
     @Test fun `REG-PAY-TIP-015 balance source includes only confirmed transfer tips`() {
         val transferOrder = order()
         val cashOrder = order(payment = DeliveryPaymentMethod.CASH).copy(id = "P25-CASH", totalAmount = 3000)

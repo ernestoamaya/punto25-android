@@ -54,6 +54,7 @@ class MandadosController(context: Context) {
         private set
     var draft by mutableStateOf(OrderDraft())
     var pendingCustomer by mutableStateOf<Customer?>(null)
+    private var authenticatedRiderId: String? = null
 
     init {
         reconcileCurrentCustomerOrderIdentity()
@@ -727,7 +728,7 @@ class MandadosController(context: Context) {
     }
 
     fun riderDigitalTipForOrder(orderId: String, riderId: String): OrderRating? {
-        if (rider(riderId) == null) return null
+        if (!hasAuthenticatedRiderSession(riderId)) return null
         val ownOrder = order(orderId) ?: return null
         val rating = ratings.firstOrNull { it.orderId == orderId } ?: return null
         return rating.takeIf {
@@ -768,7 +769,7 @@ class MandadosController(context: Context) {
     }
 
     fun pendingTipsForRider(riderId: String): List<OrderRating> {
-        if (rider(riderId) == null) return emptyList()
+        if (!hasAuthenticatedRiderSession(riderId)) return emptyList()
         return ratings.filter { rating ->
             val ownOrder = order(rating.orderId) ?: return@filter false
             canRiderConfirmTipTransfer(ownOrder, rating, riderId)
@@ -776,7 +777,7 @@ class MandadosController(context: Context) {
     }
 
     fun riderCanConfirmTip(orderId: String, riderId: String): Boolean {
-        if (rider(riderId) == null) return false
+        if (!hasAuthenticatedRiderSession(riderId)) return false
         val ownOrder = order(orderId) ?: return false
         val rating = ratings.firstOrNull { it.orderId == orderId } ?: return false
         return canRiderConfirmTipTransfer(ownOrder, rating, riderId) ||
@@ -784,7 +785,7 @@ class MandadosController(context: Context) {
     }
 
     fun confirmTip(orderId: String, riderId: String): Boolean {
-        if (rider(riderId) == null) return false
+        if (!hasAuthenticatedRiderSession(riderId)) return false
         val ownOrder = order(orderId) ?: return false
         val rating = ratings.firstOrNull { it.orderId == orderId } ?: return false
         val updated = confirmTipTransferState(ownOrder, rating, riderId) ?: return false
@@ -1557,15 +1558,28 @@ class MandadosController(context: Context) {
         }
         store.saveRiderCredentials(riderCredentials)
         store.saveRiderInvitations(riderInvitations)
+        authenticatedRiderId = invitation.riderId
         return invitation.riderId
     }
 
     fun authenticateRider(riderId: String, password: String): Boolean {
+        authenticatedRiderId = null
         val rider = rider(riderId) ?: return false
         if (!rider.active) return false
         val credential = riderCredentials.firstOrNull { it.riderId.equals(riderId.trim(), ignoreCase = true) } ?: return false
-        return verifyRiderPassword(password, credential)
+        val authenticated = verifyRiderPassword(password, credential)
+        if (authenticated) authenticatedRiderId = rider.id
+        return authenticated
     }
+
+    fun logoutRider() {
+        authenticatedRiderId = null
+    }
+
+    private fun hasAuthenticatedRiderSession(riderId: String): Boolean =
+        riderActorMatchesAuthenticatedSession(authenticatedRiderId, riderId) &&
+            rider(riderId) != null &&
+            hasRiderCredential(riderId)
 
     fun changeRiderPassword(riderId: String, currentPassword: String, newPassword: String): Boolean {
         if (!authenticateRider(riderId, currentPassword) || !passwordIsStrong(newPassword)) return false

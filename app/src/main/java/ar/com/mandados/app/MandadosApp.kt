@@ -157,7 +157,10 @@ private fun MandadosNavigation(controller: MandadosController) {
             Screen.ADMIN -> Screen.HOME
             Screen.ADMIN_ORDERS, Screen.ADMIN_REPORTS, Screen.ADMIN_SHIFTS, Screen.ADMIN_PAYMENTS, Screen.ADMIN_LEGAL, Screen.RIDERS -> Screen.ADMIN
             Screen.ADMIN_ORDER_DETAIL -> Screen.ADMIN_ORDERS
-            Screen.RIDER_WORKSPACE -> if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+            Screen.RIDER_WORKSPACE -> {
+                controller.logoutRider()
+                if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+            }
             Screen.LOCATION_PICKER -> parentForMap(mapTarget)
             Screen.HOME, Screen.REGISTER -> screen
         }
@@ -285,7 +288,10 @@ private fun MandadosNavigation(controller: MandadosController) {
         Screen.RIDER_WORKSPACE -> RiderDashboardScreen(
             controller,
             selectedRiderId,
-            onBack = { screen = if (riderStandalone) Screen.REGISTER else Screen.RIDERS }
+            onBack = {
+                controller.logoutRider()
+                screen = if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+            }
         )
         Screen.LOCATION_PICKER -> LocationPickerScreen(
             controller,
