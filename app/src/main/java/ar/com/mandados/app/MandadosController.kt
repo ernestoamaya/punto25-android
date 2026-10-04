@@ -642,9 +642,11 @@ class MandadosController(context: Context) {
                 order.events.any { it.type == OrderEventType.RIDER_ASSIGNED && it.riderId == riderId }
         }
 
+    fun riderBalanceForOrders(riderId: String, items: List<LocalOrder>): Int =
+        calculateRiderBalance(riderId, items, ratings)
+
     fun riderCurrentBalance(riderId: String): Int =
-        riderCompletedOrders(riderId).sumOf { it.totalAmount ?: 0 } +
-            ratings.filter { it.riderId == riderId && it.tipStatus == TipStatus.CONFIRMED }.sumOf { it.tipAmount }
+        riderBalanceForOrders(riderId, riderCompletedOrders(riderId))
 
     fun deliveryDurationSeconds(order: LocalOrder): Long? {
         val completedEvent = order.events.lastOrNull { it.type == OrderEventType.COMPLETED } ?: return null
@@ -687,7 +689,7 @@ class MandadosController(context: Context) {
         val riderId = o.assignedRiderId ?: return false
         if (o.status != OrderStatus.COMPLETED) return false
         if (ratings.any { it.orderId == orderId }) return false
-        val amount = if (config.paymentConfig.tipsEnabled) tipAmount.coerceAtLeast(0) else 0
+        val amount = normalizedDigitalTipAmount(o, config.paymentConfig.tipsEnabled, tipAmount)
         val rating = OrderRating(
             orderId = orderId,
             customerId = c.id,
@@ -715,15 +717,94 @@ class MandadosController(context: Context) {
 
     fun riderRatingCount(riderId: String): Int = ratings.count { it.riderId == riderId }
 
-    fun pendingTipsForRider(riderId: String): List<OrderRating> =
-        ratings.filter { it.riderId == riderId && it.tipAmount > 0 && it.tipStatus == TipStatus.SELECTED }
-            .sortedByDescending { parseTimestamp(it.createdAt) ?: LocalDateTime.MIN }
+    fun canOfferDigitalTip(order: LocalOrder): Boolean =
+        canOfferDigitalTip(order, config.paymentConfig.tipsEnabled)
 
-    fun confirmTip(orderId: String) {
-        ratings = ratings.map {
-            if (it.orderId == orderId && it.tipAmount > 0) it.copy(tipStatus = TipStatus.CONFIRMED) else it
+    fun customerDigitalTipForOrder(orderId: String): OrderRating? {
+        val ownOrder = customerOrder(orderId) ?: return null
+        val rating = ratings.firstOrNull { it.orderId == orderId } ?: return null
+        return rating.takeIf { isDigitalTipRecord(ownOrder, it) }
+    }
+
+    fun riderDigitalTipForOrder(orderId: String, riderId: String): OrderRating? {
+        if (rider(riderId) == null) return null
+        val ownOrder = order(orderId) ?: return null
+        val rating = ratings.firstOrNull { it.orderId == orderId } ?: return null
+        return rating.takeIf {
+            tipBelongsToAssignedRider(ownOrder, it, riderId) && it.tipStatus != TipStatus.NONE
         }
+    }
+
+    fun confirmedDigitalTipAmountForOrder(orderId: String, riderId: String): Int {
+        if (rider(riderId) == null) return 0
+        val ownOrder = order(orderId) ?: return 0
+        val rating = ratings.firstOrNull { it.orderId == orderId } ?: return 0
+        return confirmedDigitalTipAmount(ownOrder, rating, riderId)
+    }
+
+    fun customerCanDeclareTipTransfer(orderId: String): Boolean {
+        if (customer == null) return false
+        val ownOrder = customerOrder(orderId) ?: return false
+        val rating = ratings.firstOrNull { it.orderId == orderId } ?: return false
+        return canCustomerDeclareTipTransfer(ownOrder, rating) ||
+            isCustomerTipDeclarationIdempotent(ownOrder, rating)
+    }
+
+    fun declareTipTransfer(orderId: String): Boolean {
+        val currentCustomer = customer ?: return false
+        val ownOrder = customerOrder(orderId) ?: return false
+        val rating = ratings.firstOrNull { it.orderId == orderId } ?: return false
+        val updated = declareTipTransferState(ownOrder, rating) ?: return false
+        if (updated == rating) return true
+        ratings = ratings.map { if (it.orderId == orderId) updated else it }
         store.saveRatings(ratings)
+        appendTipEvent(
+            orderId,
+            OrderEventType.TIP_TRANSFER_DECLARED,
+            "Cliente informó la transferencia adicional de la propina",
+            currentCustomer.id
+        )
+        return true
+    }
+
+    fun pendingTipsForRider(riderId: String): List<OrderRating> {
+        if (rider(riderId) == null) return emptyList()
+        return ratings.filter { rating ->
+            val ownOrder = order(rating.orderId) ?: return@filter false
+            canRiderConfirmTipTransfer(ownOrder, rating, riderId)
+        }.sortedByDescending { parseTimestamp(it.createdAt) ?: LocalDateTime.MIN }
+    }
+
+    fun riderCanConfirmTip(orderId: String, riderId: String): Boolean {
+        if (rider(riderId) == null) return false
+        val ownOrder = order(orderId) ?: return false
+        val rating = ratings.firstOrNull { it.orderId == orderId } ?: return false
+        return canRiderConfirmTipTransfer(ownOrder, rating, riderId) ||
+            isRiderTipConfirmationIdempotent(ownOrder, rating, riderId)
+    }
+
+    fun confirmTip(orderId: String, riderId: String): Boolean {
+        if (rider(riderId) == null) return false
+        val ownOrder = order(orderId) ?: return false
+        val rating = ratings.firstOrNull { it.orderId == orderId } ?: return false
+        val updated = confirmTipTransferState(ownOrder, rating, riderId) ?: return false
+        if (updated == rating) return true
+        ratings = ratings.map { if (it.orderId == orderId) updated else it }
+        store.saveRatings(ratings)
+        appendTipEvent(
+            orderId,
+            OrderEventType.TIP_TRANSFER_CONFIRMED,
+            "Propina acreditada confirmada por el Repartidor",
+            riderId
+        )
+        return true
+    }
+
+    private fun appendTipEvent(orderId: String, type: OrderEventType, note: String, actor: String) {
+        val ownOrder = order(orderId) ?: return
+        updateOrder(ownOrder.copy(events = ownOrder.events + OrderEvent(
+            type, nowText(), ownOrder.status, ownOrder.assignedRiderId, note, actor
+        )))
     }
 
     fun paymentForOrder(orderId: String): PaymentRecord? = payments.lastOrNull { it.orderId == orderId }
