@@ -50,7 +50,7 @@ private enum class Screen {
     REGISTER, WHATSAPP_VERIFY, RIDER_ACCESS, HOME, DELIVERY, SHOPPING, REVIEW, SUBMITTED, HISTORY, ORDER_DETAIL,
     CUSTOMER_PROFILE, CUSTOMER_SUPPORT,
     ADMIN_LOGIN, ADMIN, ADMIN_ORDERS, ADMIN_ORDER_DETAIL, ADMIN_REPORTS, ADMIN_SHIFTS, ADMIN_PAYMENTS, ADMIN_LEGAL,
-    RIDERS, RIDER_WORKSPACE, LOCATION_PICKER
+    RIDERS, RIDER_ADMIN_VIEW, RIDER_WORKSPACE, LOCATION_PICKER
 }
 
 private enum class MapTarget {
@@ -157,9 +157,14 @@ private fun MandadosNavigation(controller: MandadosController) {
             Screen.ADMIN -> Screen.HOME
             Screen.ADMIN_ORDERS, Screen.ADMIN_REPORTS, Screen.ADMIN_SHIFTS, Screen.ADMIN_PAYMENTS, Screen.ADMIN_LEGAL, Screen.RIDERS -> Screen.ADMIN
             Screen.ADMIN_ORDER_DETAIL -> Screen.ADMIN_ORDERS
+            Screen.RIDER_ADMIN_VIEW -> {
+                selectedRiderId = null
+                Screen.RIDERS
+            }
             Screen.RIDER_WORKSPACE -> {
                 controller.logoutRider()
-                if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+                selectedRiderId = null
+                Screen.REGISTER
             }
             Screen.LOCATION_PICKER -> parentForMap(mapTarget)
             Screen.HOME, Screen.REGISTER -> screen
@@ -280,19 +285,39 @@ private fun MandadosNavigation(controller: MandadosController) {
             controller,
             onBack = { screen = Screen.ADMIN },
             onWorkspace = { riderId ->
+                controller.logoutRider()
                 selectedRiderId = riderId
                 riderStandalone = false
-                screen = Screen.RIDER_WORKSPACE
+                screen = Screen.RIDER_ADMIN_VIEW
             }
         )
-        Screen.RIDER_WORKSPACE -> RiderDashboardScreen(
+        Screen.RIDER_ADMIN_VIEW -> RiderAdminReadOnlyScreen(
             controller,
             selectedRiderId,
             onBack = {
-                controller.logoutRider()
-                screen = if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+                selectedRiderId = null
+                screen = Screen.RIDERS
             }
         )
+        Screen.RIDER_WORKSPACE -> {
+            if (!riderWorkspaceSessionValid(controller, selectedRiderId)) {
+                LaunchedEffect(selectedRiderId) {
+                    selectedRiderId = null
+                    riderStandalone = true
+                    screen = Screen.RIDER_ACCESS
+                }
+            } else {
+                RiderDashboardScreen(
+                    controller,
+                    selectedRiderId,
+                    onBack = {
+                        controller.logoutRider()
+                        selectedRiderId = null
+                        screen = Screen.REGISTER
+                    }
+                )
+            }
+        }
         Screen.LOCATION_PICKER -> LocationPickerScreen(
             controller,
             target = mapTarget,
@@ -624,6 +649,7 @@ private fun RiderAccessScreen(c: MandadosController, onBack: () -> Unit, onSucce
     var password by rememberSaveable { mutableStateOf("") }
     var confirm by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf("") }
+    var deactivatedRiderName by rememberSaveable { mutableStateOf<String?>(null) }
 
     Page("Acceso de Repartidor", onBack) {
         AssistBox("El alta de Repartidores es únicamente por invitación de Administración. Nadie, incluido el Admin, puede ver tu contraseña.")
@@ -692,13 +718,46 @@ private fun RiderAccessScreen(c: MandadosController, onBack: () -> Unit, onSucce
             Button(
                 onClick = {
                     val id = riderId.trim()
-                    if (c.authenticateRider(id, password)) onSuccess(id)
-                    else error = "ID o contraseña incorrectos."
+                    when (val result = c.authenticateRiderResult(id, password)) {
+                        is RiderAuthenticationResult -> when (result.status) {
+                            RiderAuthenticationStatus.AUTHENTICATED -> {
+                                error = ""
+                                onSuccess(result.riderId ?: id)
+                            }
+                            RiderAuthenticationStatus.DEACTIVATED -> {
+                                error = ""
+                                deactivatedRiderName = result.riderName.orEmpty()
+                            }
+                            RiderAuthenticationStatus.INVALID_CREDENTIALS -> {
+                                error = "ID o contraseña incorrectos."
+                            }
+                        }
+                    }
                 },
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
             ) { Text("INGRESAR") }
         }
         if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+    }
+
+    deactivatedRiderName?.let { name ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("USUARIO DESACTIVADO") },
+            text = {
+                Text("Hola $name. Tu usuario fue desactivado. Para más información, comunicate con el Administrador de Punto25. Muchas gracias")
+            },
+            confirmButton = {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    TextButton(onClick = {
+                        deactivatedRiderName = null
+                        password = ""
+                        confirm = ""
+                        c.logoutRider()
+                    }) { Text("ACEPTAR") }
+                }
+            }
+        )
     }
 }
 
@@ -1038,9 +1097,7 @@ private fun ShoppingForm(
                 val current = c.draft
                 c.draft = if (current.sameDeliveryAsPrePickup) {
                     current.copy(prePickupLocation = null, destinationLocation = null)
-                } else {
-                    current.copy(prePickupLocation = null)
-                }
+                } else d.copy(prePickupLocation = null)
             }
         }
 
@@ -1355,10 +1412,10 @@ private fun OrderDetailScreen(c: MandadosController, id: String?, onBack: () -> 
                         ) { Text(if (payment.proofUri.isNullOrBlank()) if (c.config.paymentConfig.transferProofRequired) "ADJUNTAR COMPROBANTE" else "ADJUNTAR COMPROBANTE (OPCIONAL)" else "REEMPLAZAR COMPROBANTE") }
                     }
                     if (payment.status == PaymentStatus.DECLARED) AssistBox("Transferencia informada · pendiente de confirmación del Repartidor.")
-    if (payment.status == PaymentStatus.PROOF_UPLOADED) AssistBox("Comprobante adjunto · pendiente de confirmación del Repartidor.")
-    if (payment.status == PaymentStatus.IN_REVIEW) AssistBox("Transferencia en revisión · el Repartidor todavía no visualiza la acreditación.")
-    if (!payment.proofUri.isNullOrBlank()) Text("Comprobante adjunto a este pedido.")
-    if (payment.status == PaymentStatus.CONFIRMED) AssistBox("Pago confirmado por el Repartidor.")
+                    if (payment.status == PaymentStatus.PROOF_UPLOADED) AssistBox("Comprobante adjunto · pendiente de confirmación del Repartidor.")
+                    if (payment.status == PaymentStatus.IN_REVIEW) AssistBox("Transferencia en revisión · el Repartidor todavía no visualiza la acreditación.")
+                    if (!payment.proofUri.isNullOrBlank()) Text("Comprobante adjunto a este pedido.")
+                    if (payment.status == PaymentStatus.CONFIRMED) AssistBox("Pago confirmado por el Repartidor.")
                 }
             }
 
@@ -1919,7 +1976,6 @@ private fun openWhatsApp(context: Context, receiver: String, message: String) {
         context.startActivity(Intent.createChooser(share, "Compartir solicitud"))
     }
 }
-
 
 private fun formatDurationUi(seconds: Long): String {
     val s = seconds.coerceAtLeast(0)
