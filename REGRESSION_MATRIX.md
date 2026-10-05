@@ -32,6 +32,7 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-PAY-TIP-021 | Rider B no ve, no puede confirmar ni altera la propina de Rider A. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-021…` |
 | REG-RIDER-AUTH-001 | Sin sesión Rider autenticada, las acciones self-service sensibles fallan cerrado. | `RiderSessionAndTipIntegrationTest.REG-RIDER-AUTH-001…` |
 | REG-RIDER-AUTH-002 | Una sesión Rider A no puede operar recursos self-service de Rider B. | `RiderSessionAndTipIntegrationTest.REG-RIDER-AUTH-002…` |
+| REG-RIDER-AUTH-003 | La lectura de pedidos activos queda protegida por sesión: Rider A ve sólo los propios y nunca los de Rider B. | `RiderEligibilityBoundaryRegressionTest.REG-RIDER-AUTH-003…` |
 | REG-SHIFT-AUTH-001 | Rider A no puede reservar ni cancelar turnos actuando como Rider B. | `RiderSessionAndTipIntegrationTest.REG-SHIFT-AUTH-001…` |
 | REG-ORDER-AUTH-001 | Rider A no puede tomar ni modificar pedidos actuando como Rider B; las acciones administrativas explícitas quedan atribuidas a `ADMIN`. | `RiderSessionAndTipIntegrationTest.REG-ORDER-AUTH-001…` |
 | REG-RIDER-ELIG-001 | Fixture Rider persistido previo a dev3.8, activo, aprobado y con documentación obligatoria aprobada conserva login, Turnos, reserva y Disponibilidad. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ELIG-001…` |
