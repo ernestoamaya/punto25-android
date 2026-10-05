@@ -59,6 +59,27 @@ class RiderEligibilityBoundaryRegressionTest {
         assertEquals(null, c.riderDenialFeedback)
     }
 
+    @Test
+    fun `REG-RIDER-AUTH-003 lectura de pedidos activos respeta sesion Rider A B`() {
+        val riderA = pendingRider("RID-ACTIVE-A")
+        val riderB = pendingRider("RID-ACTIVE-B").copy(phone = "2345555002")
+        val store = LocalStore(context)
+        store.saveRiders(listOf(riderA, riderB))
+        store.saveOrders(
+            listOf(
+                assignedOrder("ACTIVE-A", riderA.id),
+                assignedOrder("ACTIVE-B", riderB.id)
+            )
+        )
+
+        val c = MandadosController(context)
+        val invitation = c.createRiderInvitation(riderA.id)!!
+        assertEquals(riderA.id, c.redeemRiderInvitation(invitation.code, password))
+
+        assertEquals(listOf("ACTIVE-A"), authenticatedRiderActiveOrders(c, riderA.id).map { it.id })
+        assertTrue(authenticatedRiderActiveOrders(c, riderB.id).isEmpty())
+    }
+
     private fun pendingRider(id: String): RiderProfile = RiderProfile(
         id = id,
         name = "Rider Pendiente",
