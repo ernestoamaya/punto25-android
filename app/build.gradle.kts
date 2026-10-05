@@ -22,8 +22,8 @@ android {
         applicationId = "ar.com.mandados.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.3-alpha3-dev3.8"
+        versionCode = 16
+        versionName = "0.3-alpha3-dev3.9"
 
         fun configValue(name: String): String =
             providers.gradleProperty(name).orNull
