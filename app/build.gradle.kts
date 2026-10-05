@@ -22,8 +22,8 @@ android {
         applicationId = "ar.com.mandados.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "0.3-alpha3-dev3.7"
+        versionCode = 15
+        versionName = "0.3-alpha3-dev3.8"
 
         fun configValue(name: String): String =
             providers.gradleProperty(name).orNull
@@ -70,6 +70,10 @@ android {
         compose = true
         buildConfig = true
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
@@ -95,5 +99,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
