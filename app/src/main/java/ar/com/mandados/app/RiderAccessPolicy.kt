@@ -83,3 +83,11 @@ fun riderHasApprovedRequiredDocuments(rider: RiderProfile): Boolean =
 
 fun riderWorkspaceSessionValid(controller: MandadosController, riderId: String?): Boolean =
     !riderId.isNullOrBlank() && controller.hasAuthenticatedRiderSession(riderId)
+
+fun authenticatedRiderActiveOrders(controller: MandadosController, riderId: String): List<LocalOrder> {
+    if (!controller.hasAuthenticatedRiderSession(riderId)) return emptyList()
+    return controller.orders.filter {
+        it.assignedRiderId == riderId &&
+            it.status in setOf(OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.IN_PROGRESS)
+    }
+}
