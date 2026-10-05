@@ -50,7 +50,7 @@ private enum class Screen {
     REGISTER, WHATSAPP_VERIFY, RIDER_ACCESS, HOME, DELIVERY, SHOPPING, REVIEW, SUBMITTED, HISTORY, ORDER_DETAIL,
     CUSTOMER_PROFILE, CUSTOMER_SUPPORT,
     ADMIN_LOGIN, ADMIN, ADMIN_ORDERS, ADMIN_ORDER_DETAIL, ADMIN_REPORTS, ADMIN_SHIFTS, ADMIN_PAYMENTS, ADMIN_LEGAL,
-    RIDERS, RIDER_WORKSPACE, LOCATION_PICKER
+    RIDERS, RIDER_ADMIN_VIEW, RIDER_WORKSPACE, LOCATION_PICKER
 }
 
 private enum class MapTarget {
@@ -132,7 +132,6 @@ private fun MandadosNavigation(controller: MandadosController) {
     var selectedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
     var lastOrderId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedRiderId by rememberSaveable { mutableStateOf<String?>(null) }
-    var riderStandalone by rememberSaveable { mutableStateOf(false) }
     var mapTarget by rememberSaveable { mutableStateOf<MapTarget?>(null) }
     var lastRootBackAt by rememberSaveable { mutableStateOf(0L) }
 
@@ -157,9 +156,14 @@ private fun MandadosNavigation(controller: MandadosController) {
             Screen.ADMIN -> Screen.HOME
             Screen.ADMIN_ORDERS, Screen.ADMIN_REPORTS, Screen.ADMIN_SHIFTS, Screen.ADMIN_PAYMENTS, Screen.ADMIN_LEGAL, Screen.RIDERS -> Screen.ADMIN
             Screen.ADMIN_ORDER_DETAIL -> Screen.ADMIN_ORDERS
+            Screen.RIDER_ADMIN_VIEW -> {
+                selectedRiderId = null
+                Screen.RIDERS
+            }
             Screen.RIDER_WORKSPACE -> {
                 controller.logoutRider()
-                if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+                selectedRiderId = null
+                Screen.REGISTER
             }
             Screen.LOCATION_PICKER -> parentForMap(mapTarget)
             Screen.HOME, Screen.REGISTER -> screen
@@ -202,7 +206,6 @@ private fun MandadosNavigation(controller: MandadosController) {
             onBack = { screen = Screen.REGISTER },
             onSuccess = { riderId ->
                 selectedRiderId = riderId
-                riderStandalone = true
                 screen = Screen.RIDER_WORKSPACE
             }
         )
@@ -280,19 +283,48 @@ private fun MandadosNavigation(controller: MandadosController) {
             controller,
             onBack = { screen = Screen.ADMIN },
             onWorkspace = { riderId ->
+                controller.logoutRider()
                 selectedRiderId = riderId
-                riderStandalone = false
-                screen = Screen.RIDER_WORKSPACE
+                screen = Screen.RIDER_ADMIN_VIEW
             }
         )
-        Screen.RIDER_WORKSPACE -> RiderDashboardScreen(
+        Screen.RIDER_ADMIN_VIEW -> RiderAdminReadOnlyScreen(
             controller,
             selectedRiderId,
             onBack = {
-                controller.logoutRider()
-                screen = if (riderStandalone) Screen.REGISTER else Screen.RIDERS
+                selectedRiderId = null
+                screen = Screen.RIDERS
             }
         )
+        Screen.RIDER_WORKSPACE -> {
+            val riderId = selectedRiderId
+            if (!riderWorkspaceSessionValid(controller, riderId)) {
+                LaunchedEffect(riderId) {
+                    selectedRiderId = null
+                    screen = Screen.RIDER_ACCESS
+                }
+            } else if (riderId != null && controller.riderOperationalEligibility(riderId).allowed) {
+                RiderDashboardScreen(
+                    controller,
+                    riderId,
+                    onBack = {
+                        controller.logoutRider()
+                        selectedRiderId = null
+                        screen = Screen.REGISTER
+                    }
+                )
+            } else if (riderId != null) {
+                RiderRestrictedWorkspaceScreen(
+                    controller,
+                    riderId,
+                    onBack = {
+                        controller.logoutRider()
+                        selectedRiderId = null
+                        screen = Screen.RIDER_ACCESS
+                    }
+                )
+            }
+        }
         Screen.LOCATION_PICKER -> LocationPickerScreen(
             controller,
             target = mapTarget,
@@ -308,6 +340,19 @@ private fun MandadosNavigation(controller: MandadosController) {
     )
     if (rating != null && customerContextScreen) {
         Punto25RatingDialog(controller, rating)
+    }
+
+    controller.riderDenialFeedback?.let { decision ->
+        AlertDialog(
+            onDismissRequest = { controller.clearRiderDenialFeedback() },
+            title = { Text("ACCIÓN NO DISPONIBLE") },
+            text = { Text(riderDenialMessage(decision)) },
+            confirmButton = {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    TextButton(onClick = { controller.clearRiderDenialFeedback() }) { Text("ACEPTAR") }
+                }
+            }
+        )
     }
 }
 
@@ -624,6 +669,7 @@ private fun RiderAccessScreen(c: MandadosController, onBack: () -> Unit, onSucce
     var password by rememberSaveable { mutableStateOf("") }
     var confirm by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf("") }
+    var deactivatedRiderName by rememberSaveable { mutableStateOf<String?>(null) }
 
     Page("Acceso de Repartidor", onBack) {
         AssistBox("El alta de Repartidores es únicamente por invitación de Administración. Nadie, incluido el Admin, puede ver tu contraseña.")
@@ -692,13 +738,46 @@ private fun RiderAccessScreen(c: MandadosController, onBack: () -> Unit, onSucce
             Button(
                 onClick = {
                     val id = riderId.trim()
-                    if (c.authenticateRider(id, password)) onSuccess(id)
-                    else error = "ID o contraseña incorrectos."
+                    when (val result = c.authenticateRiderResult(id, password)) {
+                        is RiderAuthenticationResult -> when (result.status) {
+                            RiderAuthenticationStatus.AUTHENTICATED -> {
+                                error = ""
+                                onSuccess(result.riderId ?: id)
+                            }
+                            RiderAuthenticationStatus.DEACTIVATED -> {
+                                error = ""
+                                deactivatedRiderName = result.riderName.orEmpty()
+                            }
+                            RiderAuthenticationStatus.INVALID_CREDENTIALS -> {
+                                error = "ID o contraseña incorrectos."
+                            }
+                        }
+                    }
                 },
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
             ) { Text("INGRESAR") }
         }
         if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+    }
+
+    deactivatedRiderName?.let { name ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("USUARIO DESACTIVADO") },
+            text = {
+                Text("Hola $name. Tu usuario fue desactivado. Para más información, comunicate con el Administrador de Punto25. Muchas gracias")
+            },
+            confirmButton = {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    TextButton(onClick = {
+                        deactivatedRiderName = null
+                        password = ""
+                        confirm = ""
+                        c.logoutRider()
+                    }) { Text("ACEPTAR") }
+                }
+            }
+        )
     }
 }
 

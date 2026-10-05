@@ -55,6 +55,8 @@ class MandadosController(context: Context) {
     var draft by mutableStateOf(OrderDraft())
     var pendingCustomer by mutableStateOf<Customer?>(null)
     private var authenticatedRiderId: String? = null
+    var riderDenialFeedback by mutableStateOf<RiderEligibilityDecision?>(null)
+        private set
 
     init {
         reconcileCurrentCustomerOrderIdentity()
@@ -307,6 +309,7 @@ class MandadosController(context: Context) {
             else -> {
                 if (!hasAuthenticatedRiderSession(effectiveActor)) return false
                 if (o.assignedRiderId != effectiveActor) return false
+                if (!riderExistingOrderContinuationDecision(effectiveActor).allowed) return false
                 val validRiderTransition = when (status) {
                     OrderStatus.IN_PROGRESS -> o.status == OrderStatus.PENDING || o.status == OrderStatus.ACCEPTED
                     OrderStatus.COMPLETED -> o.status == OrderStatus.IN_PROGRESS
@@ -373,7 +376,7 @@ class MandadosController(context: Context) {
 
         if (riderId != null) {
             val target = rider(riderId) ?: return false
-            if (!target.active || target.approvalStatus != RiderApprovalStatus.APPROVED) return false
+            if (!riderAccountEligibility(target).allowed) return false
             if (!riderHasActiveShiftNow(riderId)) return false
             if (!riderHasCapacity(target, excludingOrderId = orderId)) return false
             events += OrderEvent(
@@ -392,14 +395,27 @@ class MandadosController(context: Context) {
         return true
     }
 
-    fun takeOrder(orderId: String, riderId: String): Boolean {
-        val target = authenticatedRiderFor(riderId) ?: return false
-        val o = order(orderId) ?: return false
-        if (o.operationMode != OperationMode.MULTI_RIDER) return false
-        if (!target.active || !isRiderCurrentlyAvailable(riderId) || target.approvalStatus != RiderApprovalStatus.APPROVED) return false
-        if (!riderHasActiveShiftNow(riderId)) return false
-        if (!riderHasCapacity(target)) return false
-        if (o.status != OrderStatus.PENDING || o.assignedRiderId != null) return false
+    fun takeOrderDecision(orderId: String, riderId: String): RiderEligibilityDecision {
+        val eligibility = riderOperationalEligibility(riderId)
+        if (!eligibility.allowed) return eligibility
+        val target = rider(riderId) ?: return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
+        val o = order(orderId) ?: return RiderEligibilityDecision.denied(RiderDenialReason.ORDER_NOT_AVAILABLE)
+        if (o.operationMode != OperationMode.MULTI_RIDER || config.operationMode != OperationMode.MULTI_RIDER) {
+            return RiderEligibilityDecision.denied(RiderDenialReason.OPERATION_MODE_UNAVAILABLE)
+        }
+        if (!riderHasActiveShiftNow(riderId)) return RiderEligibilityDecision.denied(RiderDenialReason.NO_ACTIVE_SHIFT)
+        if (!isRiderCurrentlyAvailable(riderId)) return RiderEligibilityDecision.denied(RiderDenialReason.RIDER_NOT_AVAILABLE)
+        if (!riderHasCapacity(target)) return RiderEligibilityDecision.denied(RiderDenialReason.NO_CAPACITY)
+        if (o.status != OrderStatus.PENDING || o.assignedRiderId != null) {
+            return RiderEligibilityDecision.denied(RiderDenialReason.ORDER_NOT_AVAILABLE)
+        }
+        return RiderEligibilityDecision.ALLOWED
+    }
+
+    fun takeOrderWithDecision(orderId: String, riderId: String): RiderEligibilityDecision {
+        val decision = takeOrderDecision(orderId, riderId)
+        if (!decision.allowed) return decision
+        val o = order(orderId) ?: return RiderEligibilityDecision.denied(RiderDenialReason.ORDER_NOT_AVAILABLE)
         val now = nowText()
         val updated = o.copy(
             status = OrderStatus.ACCEPTED,
@@ -411,8 +427,11 @@ class MandadosController(context: Context) {
         )
         updateOrder(updated)
         ensurePaymentRecord(updated)
-        return true
+        return RiderEligibilityDecision.ALLOWED
     }
+
+    fun takeOrder(orderId: String, riderId: String): Boolean =
+        publishRiderDecision(takeOrderWithDecision(orderId, riderId)).allowed
 
     fun draftFromOrder(order: LocalOrder): OrderDraft = OrderDraft(
         serviceType = order.serviceType,
@@ -552,7 +571,7 @@ class MandadosController(context: Context) {
                             else -> current.reviewFor(key)
                         }
                     }
-                    current.copy(
+                    val updated = current.copy(
                         name = cleanName,
                         phone = cleanPhone,
                         birthDate = birthDate.trim(),
@@ -562,6 +581,11 @@ class MandadosController(context: Context) {
                         documents = documents,
                         documentReviews = reviews
                     )
+                    if (updated.approvalStatus == RiderApprovalStatus.APPROVED && riderHasApprovedRequiredDocuments(updated)) {
+                        updated
+                    } else {
+                        updated.copy(available = false, availableUntilAt = null)
+                    }
                 } else current
             }
         }
@@ -571,11 +595,14 @@ class MandadosController(context: Context) {
 
     fun setRiderApprovalStatus(id: String, status: RiderApprovalStatus) {
         riders = riders.map {
-            if (it.id == id) it.copy(
-                approvalStatus = status,
-                available = if (status == RiderApprovalStatus.APPROVED && it.active) it.available else false,
-                availableUntilAt = if (status == RiderApprovalStatus.APPROVED && it.active) it.availableUntilAt else null
-            ) else it
+            if (it.id == id) {
+                val keepAvailability = status == RiderApprovalStatus.APPROVED && it.active && riderHasApprovedRequiredDocuments(it)
+                it.copy(
+                    approvalStatus = status,
+                    available = if (keepAvailability) it.available else false,
+                    availableUntilAt = if (keepAvailability) it.availableUntilAt else null
+                )
+            } else it
         }
         store.saveRiders(riders)
     }
@@ -584,10 +611,15 @@ class MandadosController(context: Context) {
         riders = riders.map { r ->
             if (r.id != id) return@map r
             val effective = if (r.documents.uriFor(key).isNullOrBlank()) DocumentReviewStatus.NOT_UPLOADED else status
-            r.copy(
+            val updated = r.copy(
                 documentReviews = r.documentReviews + (key to effective),
                 documentNotes = if (note.isBlank()) r.documentNotes - key else r.documentNotes + (key to note.trim())
             )
+            if (updated.approvalStatus == RiderApprovalStatus.APPROVED && riderHasApprovedRequiredDocuments(updated)) {
+                updated
+            } else {
+                updated.copy(available = false, availableUntilAt = null)
+            }
         }
         store.saveRiders(riders)
     }
@@ -600,23 +632,82 @@ class MandadosController(context: Context) {
                 availableUntilAt = if (active) it.availableUntilAt else null
             ) else it
         }
+        if (!active && authenticatedRiderId == id) authenticatedRiderId = null
         store.saveRiders(riders)
     }
 
-    fun setRiderAvailable(id: String, available: Boolean): Boolean {
-        val target = authenticatedRiderFor(id) ?: return false
-        val canEnable = target.active &&
-            target.approvalStatus == RiderApprovalStatus.APPROVED &&
-            config.operationMode == OperationMode.MULTI_RIDER &&
-            riderHasActiveShiftNow(id)
-        if (available && !canEnable) return false
-        val until = if (available) LocalDateTime.now().plusMinutes(30).format(timestampFormat) else null
-        riders = riders.map {
-            if (it.id == id) it.copy(available = available && canEnable, availableUntilAt = until) else it
+    private fun riderSessionDecision(riderId: String): RiderEligibilityDecision {
+        if (!riderActorMatchesAuthenticatedSession(authenticatedRiderId, riderId)) {
+            return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
         }
-        store.saveRiders(riders)
-        return true
+        val target = rider(riderId) ?: return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
+        if (!hasRiderCredential(riderId)) return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
+        if (!target.active) {
+            if (authenticatedRiderId == target.id) authenticatedRiderId = null
+            return RiderEligibilityDecision.denied(RiderDenialReason.ACCOUNT_DEACTIVATED)
+        }
+        return RiderEligibilityDecision.ALLOWED
     }
+
+    fun riderOperationalEligibility(riderId: String): RiderEligibilityDecision {
+        val session = riderSessionDecision(riderId)
+        if (!session.allowed) return session
+        val target = rider(riderId) ?: return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
+        return riderAccountEligibility(target)
+    }
+
+    fun riderExistingOrderContinuationDecision(riderId: String): RiderEligibilityDecision {
+        val session = riderSessionDecision(riderId)
+        if (!session.allowed) return session
+        val target = rider(riderId) ?: return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
+        val account = riderAccountEligibility(target)
+        if (account.allowed) return RiderEligibilityDecision.ALLOWED
+        return if (account.reason in setOf(
+                RiderDenialReason.SUSPENDED,
+                RiderDenialReason.DOCUMENT_NOT_UPLOADED,
+                RiderDenialReason.DOCUMENT_PENDING,
+                RiderDenialReason.DOCUMENT_REJECTED
+            )
+        ) RiderEligibilityDecision.ALLOWED else account
+    }
+
+    fun riderCanViewShiftsDecision(riderId: String): RiderEligibilityDecision {
+        val eligibility = riderOperationalEligibility(riderId)
+        if (!eligibility.allowed) return eligibility
+        if (config.operationMode != OperationMode.MULTI_RIDER) {
+            return RiderEligibilityDecision.denied(RiderDenialReason.OPERATION_MODE_UNAVAILABLE)
+        }
+        return RiderEligibilityDecision.ALLOWED
+    }
+
+    private fun publishRiderDecision(decision: RiderEligibilityDecision): RiderEligibilityDecision {
+        riderDenialFeedback = decision.takeUnless { it.allowed }
+        return decision
+    }
+
+    fun clearRiderDenialFeedback() {
+        riderDenialFeedback = null
+    }
+
+    fun setRiderAvailableWithDecision(id: String, available: Boolean): RiderEligibilityDecision {
+        if (!available) {
+            val session = riderSessionDecision(id)
+            if (!session.allowed) return session
+            riders = riders.map { if (it.id == id) it.copy(available = false, availableUntilAt = null) else it }
+            store.saveRiders(riders)
+            return RiderEligibilityDecision.ALLOWED
+        }
+        val eligibility = riderCanViewShiftsDecision(id)
+        if (!eligibility.allowed) return eligibility
+        if (!riderHasActiveShiftNow(id)) return RiderEligibilityDecision.denied(RiderDenialReason.NO_ACTIVE_SHIFT)
+        val until = LocalDateTime.now().plusMinutes(30).format(timestampFormat)
+        riders = riders.map { if (it.id == id) it.copy(available = true, availableUntilAt = until) else it }
+        store.saveRiders(riders)
+        return RiderEligibilityDecision.ALLOWED
+    }
+
+    fun setRiderAvailable(id: String, available: Boolean): Boolean =
+        publishRiderDecision(setRiderAvailableWithDecision(id, available)).allowed
 
     fun updateRiderTransferAlias(id: String, alias: String): Boolean {
         if (authenticatedRiderFor(id) == null) return false
@@ -635,14 +726,20 @@ class MandadosController(context: Context) {
     fun isRiderCurrentlyAvailable(id: String): Boolean {
         expireAvailabilityIfNeeded(id)
         val target = rider(id) ?: return false
-        return target.available && target.active && target.approvalStatus == RiderApprovalStatus.APPROVED &&
+        return target.available && riderAccountEligibility(target).allowed &&
             config.operationMode == OperationMode.MULTI_RIDER && riderHasActiveShiftNow(id)
     }
 
     private fun expireAvailabilityIfNeeded(id: String) {
         val target = rider(id) ?: return
         val until = target.availableUntilAt?.let(::parseTimestamp)
-        val mustDisable = target.available && (until == null || !LocalDateTime.now().isBefore(until) || !riderHasActiveShiftNow(id))
+        val mustDisable = target.available && (
+            until == null ||
+                !LocalDateTime.now().isBefore(until) ||
+                !riderHasActiveShiftNow(id) ||
+                !riderAccountEligibility(target).allowed ||
+                config.operationMode != OperationMode.MULTI_RIDER
+            )
         if (mustDisable) {
             riders = riders.map { if (it.id == id) it.copy(available = false, availableUntilAt = null) else it }
             store.saveRiders(riders)
@@ -652,6 +749,12 @@ class MandadosController(context: Context) {
     fun riderCompletedOrders(riderId: String): List<LocalOrder> {
         if (!hasAuthenticatedRiderSession(riderId)) return emptyList()
         return orders.filter { it.assignedRiderId == riderId && it.status == OrderStatus.COMPLETED }
+    }
+
+    fun riderHistoryOrders(riderId: String): List<LocalOrder> {
+        if (!hasAuthenticatedRiderSession(riderId)) return emptyList()
+        val finals = setOf(OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.REJECTED)
+        return orders.filter { it.assignedRiderId == riderId && it.status in finals }
     }
 
     fun riderTotalOrders(riderId: String): Int {
@@ -1399,31 +1502,52 @@ class MandadosController(context: Context) {
             !now.isBefore(window.first) && now.isBefore(window.second)
         }
 
-    fun riderCanAccessNewOrders(riderId: String): Boolean {
-        val target = authenticatedRiderFor(riderId) ?: return false
-        if (config.operationMode != OperationMode.MULTI_RIDER) return false
-        return target.active && target.approvalStatus == RiderApprovalStatus.APPROVED && riderHasActiveShiftNow(riderId)
+    fun riderCanAccessNewOrdersDecision(riderId: String): RiderEligibilityDecision {
+        val eligibility = riderCanViewShiftsDecision(riderId)
+        if (!eligibility.allowed) return eligibility
+        if (!riderHasActiveShiftNow(riderId)) return RiderEligibilityDecision.denied(RiderDenialReason.NO_ACTIVE_SHIFT)
+        return RiderEligibilityDecision.ALLOWED
     }
 
-    fun reserveShift(riderId: String, shiftId: String, serviceDate: String): Boolean {
-        val target = authenticatedRiderFor(riderId) ?: return false
-        if (!target.active || target.approvalStatus != RiderApprovalStatus.APPROVED) return false
-        val shift = shifts.firstOrNull { it.id == shiftId && it.enabled } ?: return false
-        val window = shiftWindow(shift, serviceDate) ?: return false
-        if (!LocalDateTime.now().isBefore(window.second)) return false
+    fun riderCanAccessNewOrders(riderId: String): Boolean =
+        riderCanAccessNewOrdersDecision(riderId).allowed
+
+    fun reserveShiftDecision(riderId: String, shiftId: String, serviceDate: String): RiderEligibilityDecision {
+        val eligibility = riderCanViewShiftsDecision(riderId)
+        if (!eligibility.allowed) return eligibility
+        val shift = shifts.firstOrNull { it.id == shiftId && it.enabled }
+            ?: return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+        val window = shiftWindow(shift, serviceDate)
+            ?: return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+        if (!LocalDateTime.now().isBefore(window.second)) {
+            return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+        }
         val existing = shiftReservations.firstOrNull {
             it.riderId == riderId && it.shiftTemplateId == shiftId && it.serviceDate == serviceDate
         }
-        if (existing?.status == ShiftReservationStatus.RESERVED) return true
-        if (existing?.blockedRejoin == true) return false
+        if (existing?.status == ShiftReservationStatus.RESERVED) return RiderEligibilityDecision.ALLOWED
+        if (existing?.blockedRejoin == true) return RiderEligibilityDecision.denied(RiderDenialReason.REJOIN_BLOCKED)
         if (existing?.lastCancelledAt != null) {
-            val cancelled = parseTimestamp(existing.lastCancelledAt) ?: return false
-            if (Duration.between(cancelled, LocalDateTime.now()).toMinutes() < 15) return false
+            val cancelled = parseTimestamp(existing.lastCancelledAt)
+                ?: return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+            if (Duration.between(cancelled, LocalDateTime.now()).toMinutes() < 15) {
+                return RiderEligibilityDecision.denied(RiderDenialReason.REJOIN_COOLDOWN)
+            }
         }
         val occupied = shiftReservations.count {
             it.shiftTemplateId == shiftId && it.serviceDate == serviceDate && it.status == ShiftReservationStatus.RESERVED
         }
-        if (occupied >= shift.capacity) return false
+        if (occupied >= shift.capacity) return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_FULL)
+        return RiderEligibilityDecision.ALLOWED
+    }
+
+    fun reserveShiftWithDecision(riderId: String, shiftId: String, serviceDate: String): RiderEligibilityDecision {
+        val decision = reserveShiftDecision(riderId, shiftId, serviceDate)
+        if (!decision.allowed) return decision
+        val existing = shiftReservations.firstOrNull {
+            it.riderId == riderId && it.shiftTemplateId == shiftId && it.serviceDate == serviceDate
+        }
+        if (existing?.status == ShiftReservationStatus.RESERVED) return RiderEligibilityDecision.ALLOWED
         val nowText = nowText()
         val reservation = if (existing == null) {
             RiderShiftReservation(
@@ -1437,8 +1561,11 @@ class MandadosController(context: Context) {
         shiftReservations = shiftReservations.filterNot { it.id == reservation.id } + reservation
         store.saveShiftReservations(shiftReservations)
         appendShiftAudit(reservation, ShiftEventType.RIDER_JOINED, riderId)
-        return true
+        return RiderEligibilityDecision.ALLOWED
     }
+
+    fun reserveShift(riderId: String, shiftId: String, serviceDate: String): Boolean =
+        publishRiderDecision(reserveShiftWithDecision(riderId, shiftId, serviceDate)).allowed
 
     fun canCancelShift(reservation: RiderShiftReservation): Boolean {
         if (reservation.status != ShiftReservationStatus.RESERVED) return false
@@ -1468,7 +1595,7 @@ class MandadosController(context: Context) {
 
     fun adminAddRiderToShift(riderId: String, shiftId: String, serviceDate: String): Boolean {
         val target = rider(riderId) ?: return false
-        if (!target.active || target.approvalStatus != RiderApprovalStatus.APPROVED) return false
+        if (!riderAccountEligibility(target).allowed) return false
         val shift = shifts.firstOrNull { it.id == shiftId && it.enabled } ?: return false
         val occupied = shiftReservations.count {
             it.shiftTemplateId == shiftId && it.serviceDate == serviceDate && it.status == ShiftReservationStatus.RESERVED
@@ -1567,6 +1694,7 @@ class MandadosController(context: Context) {
         }
         if (resetAccess) {
             riderCredentials = riderCredentials.filterNot { it.riderId == riderId }
+            if (authenticatedRiderId == riderId) authenticatedRiderId = null
             store.saveRiderCredentials(riderCredentials)
         }
         val invitation = RiderInvitation(
@@ -1584,6 +1712,7 @@ class MandadosController(context: Context) {
     }
 
     fun redeemRiderInvitation(code: String, password: String): String? {
+        authenticatedRiderId = null
         if (!passwordIsStrong(password)) return null
         val normalized = code.trim().uppercase()
         val invitation = riderInvitations.firstOrNull {
@@ -1597,6 +1726,8 @@ class MandadosController(context: Context) {
             store.saveRiderInvitations(riderInvitations)
             return null
         }
+        val target = rider(invitation.riderId) ?: return null
+        if (!target.active) return null
         val credential = buildRiderCredential(invitation.riderId, password)
         riderCredentials = riderCredentials.filterNot { it.riderId == invitation.riderId } + credential
         riderInvitations = riderInvitations.map {
@@ -1608,18 +1739,38 @@ class MandadosController(context: Context) {
         return invitation.riderId
     }
 
-    fun authenticateRider(riderId: String, password: String): Boolean {
+    fun authenticateRiderResult(riderId: String, password: String): RiderAuthenticationResult {
         authenticatedRiderId = null
-        val rider = rider(riderId) ?: return false
-        if (!rider.active) return false
-        val credential = riderCredentials.firstOrNull { it.riderId.equals(riderId.trim(), ignoreCase = true) } ?: return false
-        val authenticated = verifyRiderPassword(password, credential)
-        if (authenticated) authenticatedRiderId = rider.id
-        return authenticated
+        riderDenialFeedback = null
+        val normalizedId = riderId.trim()
+        val target = riders.firstOrNull { it.id.equals(normalizedId, ignoreCase = true) }
+            ?: return RiderAuthenticationResult(RiderAuthenticationStatus.INVALID_CREDENTIALS)
+        val credential = riderCredentials.firstOrNull { it.riderId.equals(target.id, ignoreCase = true) }
+            ?: return RiderAuthenticationResult(RiderAuthenticationStatus.INVALID_CREDENTIALS)
+        if (!verifyRiderPassword(password, credential)) {
+            return RiderAuthenticationResult(RiderAuthenticationStatus.INVALID_CREDENTIALS)
+        }
+        if (!target.active) {
+            return RiderAuthenticationResult(
+                status = RiderAuthenticationStatus.DEACTIVATED,
+                riderId = target.id,
+                riderName = target.name
+            )
+        }
+        authenticatedRiderId = target.id
+        return RiderAuthenticationResult(
+            status = RiderAuthenticationStatus.AUTHENTICATED,
+            riderId = target.id,
+            riderName = target.name
+        )
     }
+
+    fun authenticateRider(riderId: String, password: String): Boolean =
+        authenticateRiderResult(riderId, password).status == RiderAuthenticationStatus.AUTHENTICATED
 
     fun logoutRider() {
         authenticatedRiderId = null
+        riderDenialFeedback = null
     }
 
     fun hasAuthenticatedRiderSession(riderId: String): Boolean =
@@ -1629,6 +1780,10 @@ class MandadosController(context: Context) {
         if (!riderActorMatchesAuthenticatedSession(authenticatedRiderId, riderId)) return null
         val target = rider(riderId) ?: return null
         if (!hasRiderCredential(riderId)) return null
+        if (!target.active) {
+            if (authenticatedRiderId == target.id) authenticatedRiderId = null
+            return null
+        }
         return target
     }
 
