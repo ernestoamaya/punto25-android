@@ -55,6 +55,8 @@ class MandadosController(context: Context) {
     var draft by mutableStateOf(OrderDraft())
     var pendingCustomer by mutableStateOf<Customer?>(null)
     private var authenticatedRiderId: String? = null
+    var riderDenialFeedback by mutableStateOf<RiderEligibilityDecision?>(null)
+        private set
 
     init {
         reconcileCurrentCustomerOrderIdentity()
@@ -307,6 +309,7 @@ class MandadosController(context: Context) {
             else -> {
                 if (!hasAuthenticatedRiderSession(effectiveActor)) return false
                 if (o.assignedRiderId != effectiveActor) return false
+                if (!riderExistingOrderContinuationDecision(effectiveActor).allowed) return false
                 val validRiderTransition = when (status) {
                     OrderStatus.IN_PROGRESS -> o.status == OrderStatus.PENDING || o.status == OrderStatus.ACCEPTED
                     OrderStatus.COMPLETED -> o.status == OrderStatus.IN_PROGRESS
@@ -428,7 +431,7 @@ class MandadosController(context: Context) {
     }
 
     fun takeOrder(orderId: String, riderId: String): Boolean =
-        takeOrderWithDecision(orderId, riderId).allowed
+        publishRiderDecision(takeOrderWithDecision(orderId, riderId)).allowed
 
     fun draftFromOrder(order: LocalOrder): OrderDraft = OrderDraft(
         serviceType = order.serviceType,
@@ -653,6 +656,21 @@ class MandadosController(context: Context) {
         return riderAccountEligibility(target)
     }
 
+    fun riderExistingOrderContinuationDecision(riderId: String): RiderEligibilityDecision {
+        val session = riderSessionDecision(riderId)
+        if (!session.allowed) return session
+        val target = rider(riderId) ?: return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
+        val account = riderAccountEligibility(target)
+        if (account.allowed) return RiderEligibilityDecision.ALLOWED
+        return if (account.reason in setOf(
+                RiderDenialReason.SUSPENDED,
+                RiderDenialReason.DOCUMENT_NOT_UPLOADED,
+                RiderDenialReason.DOCUMENT_PENDING,
+                RiderDenialReason.DOCUMENT_REJECTED
+            )
+        ) RiderEligibilityDecision.ALLOWED else account
+    }
+
     fun riderCanViewShiftsDecision(riderId: String): RiderEligibilityDecision {
         val eligibility = riderOperationalEligibility(riderId)
         if (!eligibility.allowed) return eligibility
@@ -660,6 +678,15 @@ class MandadosController(context: Context) {
             return RiderEligibilityDecision.denied(RiderDenialReason.OPERATION_MODE_UNAVAILABLE)
         }
         return RiderEligibilityDecision.ALLOWED
+    }
+
+    private fun publishRiderDecision(decision: RiderEligibilityDecision): RiderEligibilityDecision {
+        riderDenialFeedback = decision.takeUnless { it.allowed }
+        return decision
+    }
+
+    fun clearRiderDenialFeedback() {
+        riderDenialFeedback = null
     }
 
     fun setRiderAvailableWithDecision(id: String, available: Boolean): RiderEligibilityDecision {
@@ -680,7 +707,7 @@ class MandadosController(context: Context) {
     }
 
     fun setRiderAvailable(id: String, available: Boolean): Boolean =
-        setRiderAvailableWithDecision(id, available).allowed
+        publishRiderDecision(setRiderAvailableWithDecision(id, available)).allowed
 
     fun updateRiderTransferAlias(id: String, alias: String): Boolean {
         if (authenticatedRiderFor(id) == null) return false
@@ -1291,6 +1318,8 @@ class MandadosController(context: Context) {
                 return "Ese horario se superpone con otro turno específico del " + (conflict.specificDate ?: dateText) + "."
             }
         }
+        // Si ya existían reservas sobre el patrón semanal para esta fecha especial,
+        // las migramos al turno específico equivalente para no duplicar la ocurrencia.
         val migrationTargets = mutableMapOf<String, String>()
         shifts.filter { it.enabled && !it.isSpecificDate }.forEach { recurring ->
             val target = candidates.firstOrNull { shiftOccurrenceOverlap(recurring, dateText, it, dateText) }
@@ -1367,7 +1396,7 @@ class MandadosController(context: Context) {
         shifts = shifts.map { if (it.id == id) candidate else it }
         store.saveShifts(shifts)
         if (!enabled) {
-            riders.filter { riderHasActiveShiftNow(it.id) }.forEach { }
+            riders.filter { riderHasActiveShiftNow(it.id) }.forEach { /* conserva presencia si tiene otro turno */ }
         }
         return null
     }
@@ -1536,7 +1565,7 @@ class MandadosController(context: Context) {
     }
 
     fun reserveShift(riderId: String, shiftId: String, serviceDate: String): Boolean =
-        reserveShiftWithDecision(riderId, shiftId, serviceDate).allowed
+        publishRiderDecision(reserveShiftWithDecision(riderId, shiftId, serviceDate)).allowed
 
     fun canCancelShift(reservation: RiderShiftReservation): Boolean {
         if (reservation.status != ShiftReservationStatus.RESERVED) return false
@@ -1712,6 +1741,7 @@ class MandadosController(context: Context) {
 
     fun authenticateRiderResult(riderId: String, password: String): RiderAuthenticationResult {
         authenticatedRiderId = null
+        riderDenialFeedback = null
         val normalizedId = riderId.trim()
         val target = riders.firstOrNull { it.id.equals(normalizedId, ignoreCase = true) }
             ?: return RiderAuthenticationResult(RiderAuthenticationStatus.INVALID_CREDENTIALS)
@@ -1740,6 +1770,7 @@ class MandadosController(context: Context) {
 
     fun logoutRider() {
         authenticatedRiderId = null
+        riderDenialFeedback = null
     }
 
     fun hasAuthenticatedRiderSession(riderId: String): Boolean =
