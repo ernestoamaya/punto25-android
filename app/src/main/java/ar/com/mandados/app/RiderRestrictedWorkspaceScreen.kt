@@ -73,10 +73,7 @@ internal fun RiderRestrictedWorkspaceScreen(
                 }
             }
 
-            val activeOrders = c.orders.filter {
-                it.assignedRiderId == rider.id &&
-                    it.status in setOf(OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.IN_PROGRESS)
-            }
+            val activeOrders = authenticatedRiderActiveOrders(c, rider.id)
             Spacer(Modifier.height(12.dp))
             Text("Pedido ya asignado", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             if (activeOrders.isEmpty()) {
