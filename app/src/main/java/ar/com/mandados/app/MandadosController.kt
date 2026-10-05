@@ -295,22 +295,37 @@ class MandadosController(context: Context) {
     fun cancelOrderByCustomer(id: String): Boolean {
         val o = customerOrder(id) ?: return false
         if (o.status != OrderStatus.PENDING && o.status != OrderStatus.AWAITING_QUOTE) return false
-        updateOrderStatus(id, OrderStatus.CANCELLED, "Cancelado por el cliente", "CLIENTE")
-        return true
+        return updateOrderStatus(id, OrderStatus.CANCELLED, "Cancelado por el cliente", "CLIENTE")
     }
 
-    fun updateOrderStatus(id: String, status: OrderStatus, note: String? = null, actor: String? = null) {
-        val o = order(id) ?: return
-        if (o.status == status) return
+    fun updateOrderStatus(id: String, status: OrderStatus, note: String? = null, actor: String? = null): Boolean {
+        val o = order(id) ?: return false
+        val effectiveActor = actor ?: "ADMIN"
+        when (effectiveActor) {
+            "ADMIN" -> Unit
+            "CLIENTE" -> if (customerOrder(id) == null) return false
+            else -> {
+                if (!hasAuthenticatedRiderSession(effectiveActor)) return false
+                if (o.assignedRiderId != effectiveActor) return false
+                val validRiderTransition = when (status) {
+                    OrderStatus.IN_PROGRESS -> o.status == OrderStatus.PENDING || o.status == OrderStatus.ACCEPTED
+                    OrderStatus.COMPLETED -> o.status == OrderStatus.IN_PROGRESS
+                    else -> false
+                }
+                if (!validRiderTransition) return false
+            }
+        }
+        if (o.status == status) return true
         val event = OrderEvent(
             type = eventTypeForStatus(status),
             at = nowText(),
             status = status,
             riderId = o.assignedRiderId,
             note = note,
-            actor = actor ?: o.assignedRiderId ?: "ADMIN"
+            actor = effectiveActor
         )
         updateOrder(o.copy(status = status, events = o.events + event))
+        return true
     }
 
     fun canAssignRider(order: LocalOrder): Boolean =
@@ -378,9 +393,9 @@ class MandadosController(context: Context) {
     }
 
     fun takeOrder(orderId: String, riderId: String): Boolean {
+        val target = authenticatedRiderFor(riderId) ?: return false
         val o = order(orderId) ?: return false
         if (o.operationMode != OperationMode.MULTI_RIDER) return false
-        val target = rider(riderId) ?: return false
         if (!target.active || !isRiderCurrentlyAvailable(riderId) || target.approvalStatus != RiderApprovalStatus.APPROVED) return false
         if (!riderHasActiveShiftNow(riderId)) return false
         if (!riderHasCapacity(target)) return false
@@ -589,7 +604,7 @@ class MandadosController(context: Context) {
     }
 
     fun setRiderAvailable(id: String, available: Boolean): Boolean {
-        val target = rider(id) ?: return false
+        val target = authenticatedRiderFor(id) ?: return false
         val canEnable = target.active &&
             target.approvalStatus == RiderApprovalStatus.APPROVED &&
             config.operationMode == OperationMode.MULTI_RIDER &&
@@ -604,7 +619,7 @@ class MandadosController(context: Context) {
     }
 
     fun updateRiderTransferAlias(id: String, alias: String): Boolean {
-        val target = rider(id) ?: return false
+        if (authenticatedRiderFor(id) == null) return false
         val clean = alias.trim()
         riders = riders.map { if (it.id == id) it.copy(transferAlias = clean) else it }
         store.saveRiders(riders)
@@ -634,20 +649,32 @@ class MandadosController(context: Context) {
         }
     }
 
-    fun riderCompletedOrders(riderId: String): List<LocalOrder> =
-        orders.filter { it.assignedRiderId == riderId && it.status == OrderStatus.COMPLETED }
+    fun riderCompletedOrders(riderId: String): List<LocalOrder> {
+        if (!hasAuthenticatedRiderSession(riderId)) return emptyList()
+        return orders.filter { it.assignedRiderId == riderId && it.status == OrderStatus.COMPLETED }
+    }
 
-    fun riderTotalOrders(riderId: String): Int =
-        orders.count { order ->
+    fun riderTotalOrders(riderId: String): Int {
+        if (!hasAuthenticatedRiderSession(riderId)) return 0
+        return orders.count { order ->
             order.assignedRiderId == riderId ||
                 order.events.any { it.type == OrderEventType.RIDER_ASSIGNED && it.riderId == riderId }
         }
+    }
 
-    fun riderBalanceForOrders(riderId: String, items: List<LocalOrder>): Int =
-        calculateRiderBalance(riderId, items, ratings)
+    fun riderBalanceForOrders(riderId: String, items: List<LocalOrder>): Int {
+        if (!hasAuthenticatedRiderSession(riderId)) return 0
+        return calculateRiderBalance(riderId, items, ratings)
+    }
 
-    fun riderCurrentBalance(riderId: String): Int =
-        riderBalanceForOrders(riderId, riderCompletedOrders(riderId))
+    fun riderCurrentBalance(riderId: String): Int {
+        if (!hasAuthenticatedRiderSession(riderId)) return 0
+        return calculateRiderBalance(
+            riderId,
+            orders.filter { it.assignedRiderId == riderId && it.status == OrderStatus.COMPLETED },
+            ratings
+        )
+    }
 
     fun deliveryDurationSeconds(order: LocalOrder): Long? {
         val completedEvent = order.events.lastOrNull { it.type == OrderEventType.COMPLETED } ?: return null
@@ -673,8 +700,10 @@ class MandadosController(context: Context) {
         return values.sum() / values.size
     }
 
-    fun riderAverageDeliverySeconds(riderId: String): Long? =
-        averageDeliverySeconds(riderCompletedOrders(riderId))
+    fun riderAverageDeliverySeconds(riderId: String): Long? {
+        if (!hasAuthenticatedRiderSession(riderId)) return null
+        return averageDeliverySeconds(orders.filter { it.assignedRiderId == riderId && it.status == OrderStatus.COMPLETED })
+    }
 
     fun pendingRatingForCustomer(): LocalOrder? {
         if (customer == null) return null
@@ -712,11 +741,15 @@ class MandadosController(context: Context) {
     }
 
     fun riderRatingAverage(riderId: String): Double? {
+        if (!hasAuthenticatedRiderSession(riderId)) return null
         val own = ratings.filter { it.riderId == riderId }
         return if (own.isEmpty()) null else own.map { it.stars }.average()
     }
 
-    fun riderRatingCount(riderId: String): Int = ratings.count { it.riderId == riderId }
+    fun riderRatingCount(riderId: String): Int {
+        if (!hasAuthenticatedRiderSession(riderId)) return 0
+        return ratings.count { it.riderId == riderId }
+    }
 
     fun canOfferDigitalTip(order: LocalOrder): Boolean =
         canOfferDigitalTip(order, config.paymentConfig.tipsEnabled)
@@ -737,7 +770,7 @@ class MandadosController(context: Context) {
     }
 
     fun confirmedDigitalTipAmountForOrder(orderId: String, riderId: String): Int {
-        if (rider(riderId) == null) return 0
+        if (!hasAuthenticatedRiderSession(riderId)) return 0
         val ownOrder = order(orderId) ?: return 0
         val rating = ratings.firstOrNull { it.orderId == orderId } ?: return 0
         return confirmedDigitalTipAmount(ownOrder, rating, riderId)
@@ -810,42 +843,51 @@ class MandadosController(context: Context) {
 
     fun paymentForOrder(orderId: String): PaymentRecord? = payments.lastOrNull { it.orderId == orderId }
 
+    fun riderPaymentForOrder(orderId: String, riderId: String): PaymentRecord? {
+        if (!hasAuthenticatedRiderSession(riderId)) return null
+        val ownOrder = order(orderId) ?: return null
+        val payment = paymentForOrder(orderId) ?: return null
+        return payment.takeIf { riderOwnsTransfer(ownOrder, it, riderId) }
+    }
+
     private fun ensurePaymentRecord(order: LocalOrder) {
         val channel = when (order.deliveryPayment) {
-  DeliveryPaymentMethod.CASH -> PaymentChannel.CASH
-  DeliveryPaymentMethod.TRANSFER -> PaymentChannel.RIDER_TRANSFER
-  DeliveryPaymentMethod.QR -> PaymentChannel.QR_INTEROPERABLE
-  DeliveryPaymentMethod.ONLINE -> PaymentChannel.ONLINE_CHECKOUT
+            DeliveryPaymentMethod.CASH -> PaymentChannel.CASH
+            DeliveryPaymentMethod.TRANSFER -> PaymentChannel.RIDER_TRANSFER
+            DeliveryPaymentMethod.QR -> PaymentChannel.QR_INTEROPERABLE
+            DeliveryPaymentMethod.ONLINE -> PaymentChannel.ONLINE_CHECKOUT
         }
         val existing = paymentForOrder(order.id)
         val now = nowText()
         val record = if (existing == null) {
-  PaymentRecord(
-      id = "PAY-${order.id}",
-      orderId = order.id,
-      riderId = order.assignedRiderId,
-      channel = channel,
-      expectedAmount = order.totalAmount ?: 0,
-      createdAt = now,
-      updatedAt = now
-  )
+            PaymentRecord(
+                id = "PAY-${order.id}",
+                orderId = order.id,
+                riderId = order.assignedRiderId,
+                channel = channel,
+                expectedAmount = order.totalAmount ?: 0,
+                createdAt = now,
+                updatedAt = now
+            )
         } else {
-  existing.copy(
-      riderId = order.assignedRiderId,
-      channel = channel,
-      expectedAmount = order.totalAmount ?: existing.expectedAmount,
-      updatedAt = now
-  )
+            existing.copy(
+                riderId = order.assignedRiderId,
+                channel = channel,
+                expectedAmount = order.totalAmount ?: existing.expectedAmount,
+                updatedAt = now
+            )
         }
         payments = if (existing == null) payments + record else payments.map { if (it.id == record.id) record else it }
         store.savePayments(payments)
     }
 
-    private fun transfersForRider(riderId: String, statuses: Set<PaymentStatus>): List<PaymentRecord> =
-        payments.filter { payment ->
-  val ownOrder = order(payment.orderId)
-  payment.status in statuses && ownOrder != null && riderOwnsTransfer(ownOrder, payment, riderId)
+    private fun transfersForRider(riderId: String, statuses: Set<PaymentStatus>): List<PaymentRecord> {
+        if (!hasAuthenticatedRiderSession(riderId)) return emptyList()
+        return payments.filter { payment ->
+            val ownOrder = order(payment.orderId)
+            payment.status in statuses && ownOrder != null && riderOwnsTransfer(ownOrder, payment, riderId)
         }.sortedByDescending { parseTimestamp(it.updatedAt) ?: LocalDateTime.MIN }
+    }
 
     fun riderPendingTransfers(riderId: String): List<PaymentRecord> =
         transfersForRider(riderId, transferPendingStatuses)
@@ -857,18 +899,21 @@ class MandadosController(context: Context) {
         riderPendingTransfers(riderId).count(::transferRequiresAttention)
 
     fun riderCanAccessTransfer(orderId: String, riderId: String): Boolean {
+        if (!hasAuthenticatedRiderSession(riderId)) return false
         val ownOrder = order(orderId) ?: return false
         val payment = paymentForOrder(orderId) ?: return false
         return riderOwnsTransfer(ownOrder, payment, riderId)
     }
 
     fun riderCanConfirmTransfer(orderId: String, riderId: String): Boolean {
+        if (!hasAuthenticatedRiderSession(riderId)) return false
         val ownOrder = order(orderId) ?: return false
         val payment = paymentForOrder(orderId) ?: return false
         return canRiderConfirmTransfer(ownOrder, payment, riderId, config.paymentConfig.transferProofRequired)
     }
 
     fun riderCanReportTransfer(orderId: String, riderId: String): Boolean {
+        if (!hasAuthenticatedRiderSession(riderId)) return false
         val ownOrder = order(orderId) ?: return false
         val payment = paymentForOrder(orderId) ?: return false
         return canRiderReportTransfer(ownOrder, payment, riderId)
@@ -883,10 +928,10 @@ class MandadosController(context: Context) {
         payments = payments.map { if (it.id == updated.id) updated else it }
         store.savePayments(payments)
         appendPaymentEvent(
-  orderId,
-  OrderEventType.PAYMENT_DECLARED,
-  "Cliente informó que realizó la transferencia",
-  currentCustomer.id
+            orderId,
+            OrderEventType.PAYMENT_DECLARED,
+            "Cliente informó que realizó la transferencia",
+            currentCustomer.id
         )
         return true
     }
@@ -897,17 +942,17 @@ class MandadosController(context: Context) {
         val payment = paymentForOrder(orderId) ?: return false
         if (!canCustomerAttachTransferProof(payment)) return false
         val updated = payment.copy(
-  proofUri = uri,
-  status = PaymentStatus.PROOF_UPLOADED,
-  updatedAt = nowText()
+            proofUri = uri,
+            status = PaymentStatus.PROOF_UPLOADED,
+            updatedAt = nowText()
         )
         payments = payments.map { if (it.id == updated.id) updated else it }
         store.savePayments(payments)
         appendPaymentEvent(
-  orderId,
-  OrderEventType.PAYMENT_PROOF_ATTACHED,
-  "Comprobante de transferencia adjunto",
-  currentCustomer.id
+            orderId,
+            OrderEventType.PAYMENT_PROOF_ATTACHED,
+            "Comprobante de transferencia adjunto",
+            currentCustomer.id
         )
         return true
     }
@@ -919,10 +964,10 @@ class MandadosController(context: Context) {
         payments = payments.map { if (it.id == updated.id) updated else it }
         store.savePayments(payments)
         appendPaymentEvent(
-  orderId,
-  OrderEventType.PAYMENT_CONFIRMED,
-  "Acreditación confirmada por el Repartidor",
-  riderId
+            orderId,
+            OrderEventType.PAYMENT_CONFIRMED,
+            "Acreditación confirmada por el Repartidor",
+            riderId
         )
         return true
     }
@@ -934,10 +979,10 @@ class MandadosController(context: Context) {
         payments = payments.map { if (it.id == updated.id) updated else it }
         store.savePayments(payments)
         appendPaymentEvent(
-  orderId,
-  OrderEventType.PAYMENT_REVIEW_REQUESTED,
-  "El Repartidor informó que no ve acreditado el pago",
-  riderId
+            orderId,
+            OrderEventType.PAYMENT_REVIEW_REQUESTED,
+            "El Repartidor informó que no ve acreditado el pago",
+            riderId
         )
         return true
     }
@@ -945,7 +990,7 @@ class MandadosController(context: Context) {
     private fun appendPaymentEvent(orderId: String, type: OrderEventType, note: String, actor: String) {
         val o = order(orderId) ?: return
         updateOrder(o.copy(events = o.events + OrderEvent(
-  type, nowText(), o.status, o.assignedRiderId, note, actor
+            type, nowText(), o.status, o.assignedRiderId, note, actor
         )))
     }
 
@@ -1355,13 +1400,13 @@ class MandadosController(context: Context) {
         }
 
     fun riderCanAccessNewOrders(riderId: String): Boolean {
+        val target = authenticatedRiderFor(riderId) ?: return false
         if (config.operationMode != OperationMode.MULTI_RIDER) return false
-        val target = rider(riderId) ?: return false
         return target.active && target.approvalStatus == RiderApprovalStatus.APPROVED && riderHasActiveShiftNow(riderId)
     }
 
     fun reserveShift(riderId: String, shiftId: String, serviceDate: String): Boolean {
-        val target = rider(riderId) ?: return false
+        val target = authenticatedRiderFor(riderId) ?: return false
         if (!target.active || target.approvalStatus != RiderApprovalStatus.APPROVED) return false
         val shift = shifts.firstOrNull { it.id == shiftId && it.enabled } ?: return false
         val window = shiftWindow(shift, serviceDate) ?: return false
@@ -1403,6 +1448,7 @@ class MandadosController(context: Context) {
 
     fun cancelShift(reservationId: String): Boolean {
         val r = shiftReservations.firstOrNull { it.id == reservationId } ?: return false
+        if (!hasAuthenticatedRiderSession(r.riderId)) return false
         if (!canCancelShift(r)) return false
         val now = nowText()
         val newCount = r.cancellationCount + 1
@@ -1576,13 +1622,20 @@ class MandadosController(context: Context) {
         authenticatedRiderId = null
     }
 
-    private fun hasAuthenticatedRiderSession(riderId: String): Boolean =
-        riderActorMatchesAuthenticatedSession(authenticatedRiderId, riderId) &&
-            rider(riderId) != null &&
-            hasRiderCredential(riderId)
+    fun hasAuthenticatedRiderSession(riderId: String): Boolean =
+        authenticatedRiderFor(riderId) != null
+
+    private fun authenticatedRiderFor(riderId: String): RiderProfile? {
+        if (!riderActorMatchesAuthenticatedSession(authenticatedRiderId, riderId)) return null
+        val target = rider(riderId) ?: return null
+        if (!hasRiderCredential(riderId)) return null
+        return target
+    }
 
     fun changeRiderPassword(riderId: String, currentPassword: String, newPassword: String): Boolean {
-        if (!authenticateRider(riderId, currentPassword) || !passwordIsStrong(newPassword)) return false
+        if (authenticatedRiderFor(riderId) == null || !passwordIsStrong(newPassword)) return false
+        val currentCredential = riderCredentials.firstOrNull { it.riderId == riderId } ?: return false
+        if (!verifyRiderPassword(currentPassword, currentCredential)) return false
         val credential = buildRiderCredential(riderId, newPassword)
         riderCredentials = riderCredentials.filterNot { it.riderId == riderId } + credential
         store.saveRiderCredentials(riderCredentials)
