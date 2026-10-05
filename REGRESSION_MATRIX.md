@@ -43,6 +43,7 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-ELIG-007 | Rider `SUSPENDED`: login e información propia permitidos; Turnos, reserva, Disponibilidad y pedidos nuevos denegados. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ELIG-007…` |
 | REG-RIDER-ELIG-008 | Un Rider suspendido puede continuar/finalizar únicamente un pedido ya asignado con transición válida, pero no tomar uno nuevo. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ELIG-008…` |
 | REG-RIDER-ELIG-009 | Documentación que deja de ser apta permite continuar/finalizar únicamente un pedido ya asignado, pero bloquea pedidos nuevos. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ELIG-009…` |
+| REG-RIDER-ELIG-010 | `PENDING_APPROVAL` no puede usar la excepción de continuidad de pedido ya asignado; la excepción queda limitada a SUSPENDED/documentación no apta. | `RiderEligibilityBoundaryRegressionTest.REG-RIDER-ELIG-010…` |
 | REG-RIDER-LOGIN-001 | Cuenta desactivada + contraseña correcta devuelve `DEACTIVATED` y no crea sesión. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-LOGIN-001…` |
 | REG-RIDER-LOGIN-002 | Cuenta desactivada + contraseña incorrecta devuelve el mismo `INVALID_CREDENTIALS` genérico y no revela estado/identidad. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-LOGIN-002…` |
 | REG-RIDER-LOGIN-003 | Una invitación de un Rider desactivado no crea credencial ni sesión operativa al canjearse. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-LOGIN-003…` |
@@ -51,6 +52,7 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-SESSION-005 | Un Rider desactivado no puede continuar/finalizar un pedido en curso aunque hubiera sido asignado antes de la desactivación. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-SESSION-005…` |
 | REG-RIDER-HISTORY-002 | “Entregas” cuenta sólo `COMPLETED`; `CANCELLED/REJECTED` pueden conservarse en historial y el historial queda aislado por sesión Rider A/B. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-HISTORY-002…` |
 | REG-RIDER-DENIAL-001 | Las denegaciones de nuevo trabajo exponen un motivo tipado utilizable por UI, incluyendo documentación. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-DENIAL-001…` |
+| REG-RIDER-DENIAL-002 | Los wrappers usados por UI publican el motivo tipado y éste se transforma en un mensaje entendible, no en no-op silencioso. | `RiderEligibilityBoundaryRegressionTest.REG-RIDER-DENIAL-002…` |
 | REG-RIDER-ADMIN-001 | Las acciones/vistas administrativas no crean sesión Rider ni habilitan el workspace self-service. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ADMIN-001…` |
 
 Los nuevos bugs de Clase A deben incorporar, cuando sea técnicamente razonable, un `REG-*` y un test permanente antes de cerrar la tanda que los corrige.
