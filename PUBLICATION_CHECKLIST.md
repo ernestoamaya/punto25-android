@@ -39,7 +39,7 @@ Historical repository `ernestoamaya/mandados-android` must remain private. Backe
 ## Private Alpha signing and Admin access
 
 - [x] Ordinary/source-repository builds receive an empty `ALPHA_ADMIN_PIN` when no value is supplied.
-- [x] Canonical Alpha signing material is stored only through private build-channel secrets, not in Git.
+- [x] Alpha signing material is supplied to the private build channel through private repository secrets; no signing material is stored in Git.
 - [x] Private Alpha Admin configuration is supplied only through the private build channel.
 - [x] Private Alpha workflow requires an explicit 40-hex source SHA and verifies canonical-main ancestry before accessing Alpha secrets.
 - [x] Validation and signed-build jobs are separated so source provenance/tests run before signing/PIN/service secrets are used.
