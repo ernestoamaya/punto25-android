@@ -4,9 +4,9 @@ Punto25 is an Android delivery/errand platform currently under active Alpha deve
 
 Current validated Android baseline:
 
-- Version: `0.3-alpha3-dev3.6`
-- versionCode: `13`
-- Validated source baseline: `112e77223e740f3b399b9a2ad6d0a481ba736c3d` from the private historical repository.
+- Version: `0.3-alpha3-dev3.9`
+- versionCode: `16`
+- Canonical source baseline: `47a762914b24a10f7d678a3ad2b59b3888ec7c05`
 - Android package/applicationId: `ar.com.mandados.app`
 
 ## Project status
@@ -57,18 +57,18 @@ Service/configuration values can be supplied through Gradle properties or enviro
 - `PUNTO25_API_BASE_URL`
 - `WHATSAPP_VERIFY_NUMBER`
 
-Owner-controlled Alpha builds additionally use private GitHub Secrets for the rotated signing key and `ALPHA_ADMIN_PIN`. The Admin PIN is intentionally absent from public source; an ordinary build with no `ALPHA_ADMIN_PIN` has local Administration disabled. This Alpha mechanism is not a production authorization boundary and will be replaced by authenticated backend RBAC.
+`ALPHA_ADMIN_PIN` defaults to an empty value when it is not supplied. Therefore ordinary builds from this repository keep local Alpha Administration disabled. The Alpha PIN is only a temporary client-side Alpha mechanism and is not a production authorization boundary.
 
 Do not commit local credentials, private keys, keystores, service-account files or production secrets.
 
-CI validates the project with:
+Public-source CI validates the project with:
 
 ```text
 :app:testDebugUnitTest
 :app:assembleDebug
 ```
 
-The manual `Alpha APK` workflow is main-only, requires the private Alpha signing configuration, verifies the APK signature and publishes the APK together with its SHA-256 checksum.
+This repository no longer generates or publishes signed/private Alpha APK artifacts. Owner-controlled Alpha builds are produced in a separate private build channel from an explicitly supplied 40-hex commit SHA that must resolve to this repository's canonical `main`. That private channel re-validates source provenance before accessing signing/configuration secrets, verifies the APK signature/certificate and package/version metadata, records SHA-256 and build metadata, and retains the artifact privately for a limited period.
 
 ## Development workflow
 
@@ -78,11 +78,11 @@ The manual `Alpha APK` workflow is main-only, requires the private Alpha signing
 4. open a pull request;
 5. let CI validate tests/build;
 6. merge after checks pass;
-7. generate/use the APK from the validated commit;
+7. generate any controlled Alpha artifact from the exact validated source SHA in the private Alpha build channel;
 8. perform physical-device testing when required;
 9. mark the corresponding task resolved only after validation.
 
-GitHub Actions is used as CI validation, not as an iterative patch-application mechanism.
+GitHub Actions in this source repository are used for ordinary CI validation, not for distributing secret-bearing Alpha builds.
 
 ## Security
 
