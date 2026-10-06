@@ -1,0 +1,33 @@
+name: TODO-2 Dialog Inventory Audit
+
+on:
+  push:
+    branches:
+      - todo-2-dialog-dismiss-rider-dirty
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 1
+      - name: Verify baseline and inventory dialog surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "56a9d94b8cb5ae598e8a7b554c429787b86ecdc7"
+          echo '=== DIALOG SURFACES ==='
+          git grep -n -E 'AlertDialog|DatePickerDialog|BasicAlertDialog|Dialog\(|ModalBottomSheet|ExposedDropdownMenu|onDismissRequest|dismissOnClickOutside|dismissOnBackPress' -- 'app/src/main/**/*.kt' || true
+          echo '=== COUNTS ==='
+          printf 'AlertDialog='; git grep -h -o 'AlertDialog' -- 'app/src/main/**/*.kt' | wc -l
+          printf 'DatePickerDialog='; git grep -h -o 'DatePickerDialog' -- 'app/src/main/**/*.kt' | wc -l
+          printf 'BasicAlertDialog='; git grep -h -o 'BasicAlertDialog' -- 'app/src/main/**/*.kt' | wc -l
+          printf 'ModalBottomSheet='; git grep -h -o 'ModalBottomSheet' -- 'app/src/main/**/*.kt' | wc -l
+          printf 'ExposedDropdownMenu='; git grep -h -o 'ExposedDropdownMenu' -- 'app/src/main/**/*.kt' | wc -l
