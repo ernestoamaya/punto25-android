@@ -2057,7 +2057,7 @@ private fun ZoneDropdown(c: MandadosController, label: String, current: String, 
         )
         ExposedDropdownMenu(expanded, { expanded = false }) {
             if (allowBlank) DropdownMenuItem({ Text("Sin zona") }, { onSelect(""); expanded = false })
-            c.config.zones.forEach { z ->
+            zonesForPresentation(c.config.zones).forEach { z ->
                 DropdownMenuItem({ Text(z.name) }, { onSelect(z.id); expanded = false })
             }
             DropdownMenuItem({ Text("No sé qué zona corresponde") }, { onSelect(UNKNOWN_ZONE_ID); expanded = false })
