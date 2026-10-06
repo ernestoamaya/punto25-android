@@ -343,7 +343,7 @@ private fun MandadosNavigation(controller: MandadosController) {
     }
 
     controller.riderDenialFeedback?.let { decision ->
-        AlertDialog(
+        Punto25AlertDialog(
             onDismissRequest = { controller.clearRiderDenialFeedback() },
             title = { Text("ACCIÓN NO DISPONIBLE") },
             text = { Text(riderDenialMessage(decision)) },
@@ -761,7 +761,7 @@ private fun RiderAccessScreen(c: MandadosController, onBack: () -> Unit, onSucce
     }
 
     deactivatedRiderName?.let { name ->
-        AlertDialog(
+        Punto25AlertDialog(
             onDismissRequest = {},
             title = { Text("USUARIO DESACTIVADO") },
             text = {
@@ -1487,7 +1487,7 @@ private fun OrderDetailScreen(c: MandadosController, id: String?, onBack: () -> 
     }
 
     if (confirmCancel && o != null) {
-        AlertDialog(
+        Punto25AlertDialog(
             onDismissRequest = { confirmCancel = false },
             title = { Text("Cancelar solicitud") },
             text = { Text("¿Querés cancelar este pedido? Quedará registrado como Cancelado en el historial.") },
@@ -1692,13 +1692,27 @@ private fun ZoneAdminDialog(
     onDismiss: () -> Unit,
     onSave: (String, String, String, Int) -> Unit
 ) {
-    var name by remember(zone?.id) { mutableStateOf(zone?.name ?: "") }
-    var description by remember(zone?.id) { mutableStateOf(zone?.description ?: "") }
-    var category by remember(zone?.id) { mutableStateOf(zone?.category ?: "OTRAS") }
-    var priceText by remember(zone?.id) { mutableStateOf(zone?.price?.takeIf { it > 0 }?.toString() ?: "") }
+    val initialName = zone?.name ?: ""
+    val initialDescription = zone?.description ?: ""
+    val initialCategory = zone?.category ?: "OTRAS"
+    val initialPriceText = zone?.price?.takeIf { it > 0 }?.toString() ?: ""
+    var name by remember(zone?.id) { mutableStateOf(initialName) }
+    var description by remember(zone?.id) { mutableStateOf(initialDescription) }
+    var category by remember(zone?.id) { mutableStateOf(initialCategory) }
+    var priceText by remember(zone?.id) { mutableStateOf(initialPriceText) }
+    var confirmDiscard by remember(zone?.id) { mutableStateOf(false) }
+    val dirty = name != initialName || description != initialDescription || category != initialCategory || priceText != initialPriceText
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
+    fun requestDismiss(source: PendingEditDismissSource) {
+        when (pendingEditDismissDecision(source, dirty)) {
+            PendingEditDismissDecision.KEEP_OPEN -> Unit
+            PendingEditDismissDecision.CLOSE -> onDismiss()
+            PendingEditDismissDecision.CONFIRM_DISCARD -> confirmDiscard = true
+        }
+    }
+
+    Punto25AlertDialog(
+        onDismissRequest = { requestDismiss(PendingEditDismissSource.BACK) },
         title = { Text(if (zone == null) "Agregar zona" else "Editar zona") },
         text = {
             Column {
@@ -1721,9 +1735,19 @@ private fun ZoneAdminDialog(
                 enabled = name.trim().isNotBlank()
             ) { Text("GUARDAR") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCELAR") } }
+        dismissButton = {
+            TextButton(onClick = { requestDismiss(PendingEditDismissSource.CANCEL) }) { Text("CANCELAR") }
+        }
     )
+
+    if (confirmDiscard) {
+        DiscardChangesDialog(
+            onKeepEditing = { confirmDiscard = false },
+            onDiscard = { confirmDiscard = false; onDismiss() }
+        )
+    }
 }
+
 
 @Composable
 private fun LocationField(
@@ -1938,7 +1962,7 @@ private fun ZoneField(
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
     ) { Text("$label: $selected") }
     if (open) {
-        AlertDialog(onDismissRequest = { open = false }, confirmButton = { TextButton(onClick = { open = false }) { Text("Cerrar") } }, title = { Text(label) }, text = {
+        Punto25AlertDialog(onDismissRequest = { open = false }, confirmButton = { TextButton(onClick = { open = false }) { Text("Cerrar") } }, title = { Text(label) }, text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                 if (allowBlank) EnumRadio("Sin especificar", selectedId.isBlank()) { onSelect(""); open = false }
                 var lastCategoryKey: String? = null
