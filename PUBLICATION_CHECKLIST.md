@@ -2,16 +2,17 @@
 
 Canonical public target: `ernestoamaya/punto25-android`.
 
-Historical repository `ernestoamaya/mandados-android` must remain private. Backend repository `ernestoamaya/punto25-backend` must remain private.
+Historical repository `ernestoamaya/mandados-android` must remain private. Backend repository `ernestoamaya/punto25-backend` must remain private. The dedicated Alpha build/distribution channel must remain private.
 
 ## Source and history
 
 - [x] New clean Android repository created privately.
-- [x] Physically validated `0.3-alpha3-dev3.6` Android baseline exported through a sanitized Android-only snapshot.
 - [x] Backend excluded from the Android import.
-- [x] Historical `debug.keystore` and other signing-file extensions excluded from the Android import.
-- [ ] Final canonical `main` history rebuilt from clean repository objects so temporary migration workflows/URLs are not part of the public branch history.
-- [ ] Final tree re-scanned for secrets and signing material immediately before publication.
+- [x] Historical tracked signing material excluded from the Android import.
+- [x] Current canonical Android baseline is `0.3-alpha3-dev3.9` / versionCode `16` / applicationId `ar.com.mandados.app`.
+- [ ] Run the planned all-ref/all-object secret scan and classify findings before any publication decision.
+- [ ] Prune obsolete branches only after history-scan findings are classified.
+- [ ] Re-scan the final publication tree/history after cleanup.
 
 ## Ownership and repository documentation
 
@@ -22,42 +23,53 @@ Historical repository `ernestoamaya/mandados-android` must remain private. Backe
 - [x] `CONTRIBUTING.md` added; unsolicited external contributions are not accepted during Alpha.
 - [x] `CODEOWNERS` added.
 - [x] Third-party notices added.
-- [x] Pre-publication security audit added.
+- [x] Pre-publication security audit added and updated for the private Alpha channel.
 
-## CI and supply-chain controls
+## Source-repository CI and supply-chain controls
 
 - [x] Unit tests remain mandatory before debug build.
 - [x] Pull-request CI does not receive repository secrets.
 - [x] GitHub Actions use immutable commit SHAs.
 - [x] GitHub token permissions are least-privilege.
 - [x] Superseded CI runs are cancelled through concurrency control.
-- [x] APK names are derived from Android `versionName`.
-- [x] Signed Alpha artifact workflow is manual/main-only and emits SHA-256.
-- [ ] Clean-repository CI passes on the imported baseline.
+- [x] Canonical source-repository CI passes tests/build for the current baseline.
+- [x] Secret-bearing Alpha artifact generation has been removed from this source repository.
+- [x] The source repository retains ordinary `ci.yml` only for Android test/build validation.
 
-## Alpha signing and Admin access
+## Private Alpha signing and Admin access
 
-- [x] Retired tracked debug signing key excluded from the clean repository.
-- [x] Legacy hardcoded Admin PIN removed from public Android source.
-- [x] Ordinary/public builds disable local Admin access when `ALPHA_ADMIN_PIN` is absent.
-- [ ] Generate a new private Punto25 Alpha keystore outside Git.
-- [ ] Configure `ALPHA_KEYSTORE_B64`, `ALPHA_KEYSTORE_PASSWORD`, `ALPHA_KEY_ALIAS`, and `ALPHA_KEY_PASSWORD` as GitHub Secrets.
-- [ ] Configure a private 6–8 digit `ALPHA_ADMIN_PIN` GitHub Secret for owner-controlled Alpha builds.
-- [ ] Generate the first APK using the rotated Alpha key.
-- [ ] Physically install/reinstall and validate the rotated-signature APK and Alpha Admin access.
+- [x] Ordinary/source-repository builds receive an empty `ALPHA_ADMIN_PIN` when no value is supplied.
+- [x] Canonical Alpha signing material is stored only through private build-channel secrets, not in Git.
+- [x] Private Alpha Admin configuration is supplied only through the private build channel.
+- [x] Private Alpha workflow requires an explicit 40-hex source SHA and verifies canonical-main ancestry before accessing Alpha secrets.
+- [x] Validation and signed-build jobs are separated so source provenance/tests run before signing/PIN/service secrets are used.
+- [x] Private signed APK verification includes signer/certificate, package/applicationId, version metadata and SHA-256 evidence.
+- [x] First controlled private Alpha artifact from source SHA `47a762914b24a10f7d678a3ad2b59b3888ec7c05` completed successfully in run `37397037436` with artifact ID `11384111656`.
+- [ ] Complete the required physical-device install/reinstall validation for the current canonical Alpha signature/build.
 
-## Security blockers before public visibility
+## Remaining security blockers before public visibility
 
-- [ ] Confirm final public history contains no backend source and no signing key.
-- [ ] Configure a protected-main ruleset / required CI checks.
+- [ ] Complete the all-ref/all-object history scanner and resolve any blocking findings.
+- [ ] Ensure older Alpha artifacts created in this source repository have expired or are explicitly removed before publication.
+- [ ] Confirm final public history contains no backend source, active secrets or signing material.
+- [ ] Configure the intended protected-main ruleset / required CI checks.
 - [ ] Enable secret scanning and push protection where available.
 - [ ] Enable code scanning / CodeQL where appropriate.
 - [ ] Enable private vulnerability reporting where available.
 - [ ] Review Dependabot/security-alert settings.
+- [ ] Review dependency/license notices against resolved dependencies.
+
+## Bootstrap credential after source publication
+
+- [ ] After this source repository is public, switch the private Alpha checkout to public-source access without the temporary read credential.
+- [ ] Validate the private Alpha workflow again without that credential.
+- [ ] Remove the temporary source-read repository secret from the private Alpha channel.
+- [ ] Revoke the temporary fine-grained source-read token and verify it is unusable.
 
 ## Publication
 
 - [ ] Owner performs final review of README, copyright and trademark presentation.
-- [ ] Keep `punto25-backend` private.
-- [ ] Keep `mandados-android` private as historical archive.
+- [x] Keep `punto25-backend` private.
+- [x] Keep `mandados-android` private as historical archive.
+- [x] Keep the dedicated Alpha build/distribution channel private.
 - [ ] Change only `punto25-android` from Private to Public after every blocker above is closed.
