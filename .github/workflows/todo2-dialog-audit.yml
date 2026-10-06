@@ -17,17 +17,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 1
+          fetch-depth: 2
       - name: Verify baseline and inventory dialog surfaces
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "56a9d94b8cb5ae598e8a7b554c429787b86ecdc7"
+          git merge-base --is-ancestor 56a9d94b8cb5ae598e8a7b554c429787b86ecdc7 HEAD
           echo '=== DIALOG SURFACES ==='
           git grep -n -E 'AlertDialog|DatePickerDialog|BasicAlertDialog|Dialog\(|ModalBottomSheet|ExposedDropdownMenu|onDismissRequest|dismissOnClickOutside|dismissOnBackPress' -- 'app/src/main/**/*.kt' || true
           echo '=== COUNTS ==='
-          printf 'AlertDialog='; git grep -h -o 'AlertDialog' -- 'app/src/main/**/*.kt' | wc -l
-          printf 'DatePickerDialog='; git grep -h -o 'DatePickerDialog' -- 'app/src/main/**/*.kt' | wc -l
-          printf 'BasicAlertDialog='; git grep -h -o 'BasicAlertDialog' -- 'app/src/main/**/*.kt' | wc -l
-          printf 'ModalBottomSheet='; git grep -h -o 'ModalBottomSheet' -- 'app/src/main/**/*.kt' | wc -l
-          printf 'ExposedDropdownMenu='; git grep -h -o 'ExposedDropdownMenu' -- 'app/src/main/**/*.kt' | wc -l
+          printf 'AlertDialog='; (git grep -h -o 'AlertDialog' -- 'app/src/main/**/*.kt' || true) | wc -l
+          printf 'DatePickerDialog='; (git grep -h -o 'DatePickerDialog' -- 'app/src/main/**/*.kt' || true) | wc -l
+          printf 'BasicAlertDialog='; (git grep -h -o 'BasicAlertDialog' -- 'app/src/main/**/*.kt' || true) | wc -l
+          printf 'ModalBottomSheet='; (git grep -h -o 'ModalBottomSheet' -- 'app/src/main/**/*.kt' || true) | wc -l
+          printf 'ExposedDropdownMenu='; (git grep -h -o 'ExposedDropdownMenu' -- 'app/src/main/**/*.kt' || true) | wc -l
