@@ -1640,7 +1640,7 @@ private fun AdminScreen(
         }
         Text("Las zonas utilizadas por pedidos históricos no se eliminan: pueden renombrarse o desactivarse sin cambiar su ID interno.", style = MaterialTheme.typography.bodySmall)
 
-        cfg.zones.forEach { z ->
+        zonesForPresentation(cfg.zones).forEach { z ->
             Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1941,9 +1941,14 @@ private fun ZoneField(
         AlertDialog(onDismissRequest = { open = false }, confirmButton = { TextButton(onClick = { open = false }) { Text("Cerrar") } }, title = { Text(label) }, text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                 if (allowBlank) EnumRadio("Sin especificar", selectedId.isBlank()) { onSelect(""); open = false }
-                var lastCategory = ""
-                c.config.zones.filter { it.enabled }.forEach { z ->
-                    if (z.category != lastCategory) { lastCategory = z.category; Spacer(Modifier.height(8.dp)); Text(lastCategory, fontWeight = FontWeight.Bold) }
+                var lastCategoryKey: String? = null
+                zonesForPresentation(c.config.zones.filter { it.enabled }).forEach { z ->
+                    val categoryKey = zonePresentationKey(z.category)
+                    if (categoryKey != lastCategoryKey) {
+                        lastCategoryKey = categoryKey
+                        Spacer(Modifier.height(8.dp))
+                        Text(z.category, fontWeight = FontWeight.Bold)
+                    }
                     EnumRadio("${z.name}${if (z.price > 0) " — ${money(z.price)}" else " — A configurar"}${if (z.description.isNotBlank()) "\n${z.description}" else ""}", selectedId == z.id) { onSelect(z.id); open = false }
                 }
                 Spacer(Modifier.height(8.dp))
