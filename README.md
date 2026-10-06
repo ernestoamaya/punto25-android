@@ -6,7 +6,7 @@ Current validated Android baseline:
 
 - Version: `0.3-alpha3-dev3.9`
 - versionCode: `16`
-- Canonical source baseline: `47a762914b24a10f7d678a3ad2b59b3888ec7c05`
+- Canonical source branch: `main`; the exact publication SHA must be re-verified immediately before any visibility change.
 - Android package/applicationId: `ar.com.mandados.app`
 
 ## Project status
@@ -88,13 +88,13 @@ GitHub Actions in this source repository are used for ordinary CI validation, no
 
 Read `SECURITY.md` and `SECURITY_AUDIT.md` before reporting vulnerabilities or handling sensitive configuration.
 
-The repository must not contain production signing material or backend secrets. `PUBLICATION_CHECKLIST.md` tracks the remaining controls before public visibility.
+The repository must not contain production signing material or backend secrets. `PUBLICATION_CHECKLIST.md` separates pre-publication gates from controls that must be applied atomically immediately after a future visibility change.
 
 ## Copyright and usage
 
 Copyright © 2026 Ernesto Enrique Amaya. All rights reserved.
 
-This repository is intended to be publicly viewable, but it is not being released under an open-source license. See `LICENSE` and `COPYRIGHT.md`. Third-party components remain subject to their own terms; see `THIRD_PARTY_NOTICES.md`.
+This repository is intended to be publicly viewable, but it is not being released under an open-source license. See `LICENSE` and `COPYRIGHT.md`. Third-party components and media remain subject to their own terms; see `THIRD_PARTY_NOTICES.md`.
 
 ## Contributions
 
