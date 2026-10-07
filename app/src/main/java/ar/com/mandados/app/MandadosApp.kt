@@ -1123,7 +1123,9 @@ private fun ShoppingForm(
                 val current = c.draft
                 c.draft = if (current.sameDeliveryAsPrePickup) {
                     current.copy(prePickupLocation = null, destinationLocation = null)
-                } else current.copy(prePickupLocation = null)
+                } else {
+                    current.copy(prePickupLocation = null)
+                }
             }
         }
 
