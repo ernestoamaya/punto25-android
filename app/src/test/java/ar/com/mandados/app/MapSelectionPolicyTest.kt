@@ -127,9 +127,12 @@ class MapSelectionPolicyTest {
         assertTrue(gradle.contains("targetSdk = 36"))
         assertTrue(gradle.contains("minSdk = 26"))
         workflows.forEach { workflow ->
-            assertTrue(workflow.contains("platforms;android-37"))
+            assertTrue(workflow.contains("android sdk install --canary platforms/android-37"))
+            assertTrue(workflow.contains("packages: 'platform-tools build-tools;36.0.0'"))
             assertTrue(workflow.contains("build-tools;36.0.0"))
+            assertFalse(workflow.contains("packages: 'platform-tools platforms;android-37"))
             assertFalse(workflow.contains("platforms;android-36"))
+            assertFalse(workflow.contains("sdkmanager --channel"))
         }
     }
 
