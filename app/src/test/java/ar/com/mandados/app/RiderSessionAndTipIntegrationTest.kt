@@ -24,7 +24,6 @@ import javax.crypto.spec.PBEKeySpec
 class RiderSessionAndTipIntegrationTest {
     private lateinit var context: Context
     private val stamp = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
-    private val day = DateTimeFormatter.ofPattern("dd/MM/yyyy")
 
     private val customer = Customer(
         name = "Cliente Test",
@@ -89,10 +88,7 @@ class RiderSessionAndTipIntegrationTest {
         assertEquals(TipStatus.CONFIRMED, tip.tipStatus)
         assertTrue(c.pendingTipsForRider(riderA.id).isEmpty())
         assertEquals(before + 100, c.riderCurrentBalance(riderA.id))
-        assertEquals(
-            1,
-            c.order(TIP_ORDER_ID)!!.events.count { it.type == OrderEventType.TIP_TRANSFER_CONFIRMED }
-        )
+        assertEquals(1, c.order(TIP_ORDER_ID)!!.events.count { it.type == OrderEventType.TIP_TRANSFER_CONFIRMED })
     }
 
     @Test
@@ -115,10 +111,7 @@ class RiderSessionAndTipIntegrationTest {
         assertEquals(100, restored.tipAmount)
         assertTrue(restarted.pendingTipsForRider(riderA.id).isEmpty())
         assertEquals(balanceAfterConfirm, restarted.riderCurrentBalance(riderA.id))
-        assertEquals(
-            1,
-            restarted.order(TIP_ORDER_ID)!!.events.count { it.type == OrderEventType.TIP_TRANSFER_CONFIRMED }
-        )
+        assertEquals(1, restarted.order(TIP_ORDER_ID)!!.events.count { it.type == OrderEventType.TIP_TRANSFER_CONFIRMED })
     }
 
     @Test
@@ -152,26 +145,22 @@ class RiderSessionAndTipIntegrationTest {
         assertFalse(c.riderCanConfirmTip(TIP_ORDER_ID, riderB.id))
         assertFalse(c.confirmTip(TIP_ORDER_ID, riderB.id))
         assertEquals(TipStatus.TRANSFER_DECLARED, c.ratings.single { it.orderId == TIP_ORDER_ID }.tipStatus)
-        assertEquals(
-            0,
-            c.order(TIP_ORDER_ID)!!.events.count { it.type == OrderEventType.TIP_TRANSFER_CONFIRMED }
-        )
+        assertEquals(0, c.order(TIP_ORDER_ID)!!.events.count { it.type == OrderEventType.TIP_TRANSFER_CONFIRMED })
     }
 
     @Test
     fun `REG-RIDER-AUTH-001 sin sesion Rider las acciones self service fallan cerrado`() {
         seedRidersAndCredentials()
-        val store = LocalStore(context)
         val shift = allDayShift()
+        seedV2(listOf(shift))
         val pendingOrder = pendingOrder("P25-AUTH-NOSESSION")
-        store.saveShifts(listOf(shift))
-        store.saveOrders(listOf(pendingOrder))
+        LocalStore(context).saveOrders(listOf(pendingOrder))
         val c = MandadosController(context)
 
         assertFalse(c.hasAuthenticatedRiderSession(riderA.id))
         assertFalse(c.setRiderAvailable(riderA.id, true))
         assertFalse(c.updateRiderTransferAlias(riderA.id, "alias.a"))
-        assertFalse(c.reserveShift(riderA.id, shift.id, LocalDate.now().format(day)))
+        assertFalse(c.reserveShift(riderA.id, shift.id))
         assertFalse(c.takeOrder(pendingOrder.id, riderA.id))
         assertFalse(c.confirmTip("NO-EXISTE", riderA.id))
         assertEquals(0, c.riderCurrentBalance(riderA.id))
@@ -180,15 +169,14 @@ class RiderSessionAndTipIntegrationTest {
     @Test
     fun `REG-RIDER-AUTH-002 sesion Rider A no opera recursos de Rider B`() {
         seedRidersAndCredentials()
-        val store = LocalStore(context)
         val shift = allDayShift()
-        store.saveShifts(listOf(shift))
+        seedV2(listOf(shift))
         val c = MandadosController(context)
         assertTrue(c.authenticateRider(riderA.id, passwordA))
 
         assertFalse(c.setRiderAvailable(riderB.id, true))
         assertFalse(c.updateRiderTransferAlias(riderB.id, "alias.b"))
-        assertFalse(c.reserveShift(riderB.id, shift.id, LocalDate.now().format(day)))
+        assertFalse(c.reserveShift(riderB.id, shift.id))
         assertFalse(c.changeRiderPassword(riderB.id, passwordB, "NuevoB123"))
         assertEquals("", c.rider(riderB.id)!!.transferAlias)
     }
@@ -235,25 +223,22 @@ class RiderSessionAndTipIntegrationTest {
     fun `REG-SHIFT-AUTH-001 Rider A no reserva ni cancela turnos como Rider B`() {
         seedRidersAndCredentials()
         val shift = allDayShift()
-        val reservation = RiderShiftReservation(
-            id = "SHR-B",
+        val reservation = ConcreteShiftReservation(
+            id = "CSR-B",
             riderId = riderB.id,
-            shiftTemplateId = shift.id,
-            serviceDate = LocalDate.now().format(day),
+            concreteShiftId = shift.id,
             joinedAt = nowText(),
             status = ShiftReservationStatus.RESERVED
         )
-        val store = LocalStore(context)
-        store.saveShifts(listOf(shift))
-        store.saveShiftReservations(listOf(reservation))
+        seedV2(listOf(shift), listOf(reservation))
         val c = MandadosController(context)
         assertTrue(c.authenticateRider(riderA.id, passwordA))
 
-        assertFalse(c.reserveShift(riderB.id, shift.id, reservation.serviceDate))
-        assertFalse(c.cancelShift(reservation.id))
+        assertFalse(c.reserveShift(riderB.id, shift.id))
+        assertFalse(c.cancelConcreteShift(reservation.id))
         assertEquals(
             ShiftReservationStatus.RESERVED,
-            c.shiftReservations.single { it.id == reservation.id }.status
+            c.concreteShiftReservations.single { it.id == reservation.id }.status
         )
     }
 
@@ -305,10 +290,7 @@ class RiderSessionAndTipIntegrationTest {
         assertEquals(100, c.ratings.single { it.orderId == order.id }.tipAmount)
         assertTrue(c.declareTipTransfer(order.id))
         assertEquals(TipStatus.TRANSFER_DECLARED, c.ratings.single { it.orderId == order.id }.tipStatus)
-        assertEquals(
-            1,
-            c.order(order.id)!!.events.count { it.type == OrderEventType.TIP_TRANSFER_DECLARED }
-        )
+        assertEquals(1, c.order(order.id)!!.events.count { it.type == OrderEventType.TIP_TRANSFER_DECLARED })
         return c
     }
 
@@ -321,6 +303,12 @@ class RiderSessionAndTipIntegrationTest {
                 testCredential(riderB.id, passwordB)
             )
         )
+    }
+
+    private fun seedV2(shifts: List<ConcreteShift>, reservations: List<ConcreteShiftReservation> = emptyList()) {
+        val v2 = ShiftStoreV2(context)
+        assertTrue(v2.initializeIfNeeded().success)
+        assertTrue(v2.saveAll(emptyList(), shifts, reservations, emptyList()))
     }
 
     private fun testCredential(riderId: String, password: String): RiderCredential {
@@ -400,11 +388,11 @@ class RiderSessionAndTipIntegrationTest {
         deliveryPayment = DeliveryPaymentMethod.CASH
     )
 
-    private fun allDayShift(): ShiftTemplate = ShiftTemplate(
-        id = "SHIFT-ALL-DAY",
-        dayOfWeek = LocalDate.now().dayOfWeek.value,
-        startTime = "00:00",
-        endTime = "24:00",
+    private fun allDayShift(): ConcreteShift = ConcreteShift(
+        id = "CS-ALL-DAY",
+        serviceDate = ShiftSchedulePolicy.toIsoDate(LocalDate.now()),
+        startMinute = 0,
+        endMinute = 24 * 60,
         capacity = 2,
         enabled = true
     )
