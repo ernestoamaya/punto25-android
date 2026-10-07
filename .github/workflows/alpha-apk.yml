@@ -189,7 +189,6 @@ jobs:
       - name: Validate runtime Alpha configuration
         shell: bash
         env:
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
@@ -197,7 +196,7 @@ jobs:
           PUNTO25_API_BASE_URL: ${{ secrets.PUNTO25_API_BASE_URL }}
         run: |
           set -euo pipefail
-          for name in MAPS_API_KEY FIREBASE_API_KEY FIREBASE_APP_ID FIREBASE_PROJECT_ID GOOGLE_WEB_CLIENT_ID PUNTO25_API_BASE_URL; do
+          for name in FIREBASE_API_KEY FIREBASE_APP_ID FIREBASE_PROJECT_ID GOOGLE_WEB_CLIENT_ID PUNTO25_API_BASE_URL; do
             if [[ -z "${!name:-}" ]]; then
               echo "Required Alpha runtime configuration is missing: $name" >&2
               exit 1
@@ -256,7 +255,6 @@ jobs:
           ALPHA_KEYSTORE_PASSWORD: ${{ secrets.ALPHA_KEYSTORE_PASSWORD }}
           ALPHA_KEY_ALIAS: ${{ secrets.ALPHA_KEY_ALIAS }}
           ALPHA_KEY_PASSWORD: ${{ secrets.ALPHA_KEY_PASSWORD }}
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
