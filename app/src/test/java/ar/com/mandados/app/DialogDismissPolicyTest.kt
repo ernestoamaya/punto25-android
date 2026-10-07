@@ -1,6 +1,7 @@
 package ar.com.mandados.app
 
 import android.content.Context
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -118,6 +119,22 @@ class DialogDismissPolicyTest {
     }
 
     @Test
+    fun `REG-RIDER-EDIT-DISCARD-001 Rider wiring preserva seguir editando y descarta solo confirmado`() {
+        val policySource = projectSource("src/main/java/ar/com/mandados/app/Punto25DialogPolicy.kt")
+        val operationsSource = projectSource("src/main/java/ar/com/mandados/app/OperationsScreens.kt")
+        val riderDialog = operationsSource
+            .substringAfter("private fun RiderEditDialog(")
+            .substringBefore("private fun RiderDocumentsDialog(")
+
+        assertTrue(policySource.contains("TextButton(onClick = onDiscard) { Text(\"DESCARTAR CAMBIOS\") }"))
+        assertTrue(policySource.contains("TextButton(onClick = onKeepEditing) { Text(\"SEGUIR EDITANDO\") }"))
+        assertTrue(riderDialog.contains("onDismissRequest = { requestDismiss(PendingEditDismissSource.BACK) }"))
+        assertTrue(riderDialog.contains("requestDismiss(PendingEditDismissSource.CANCEL)"))
+        assertTrue(riderDialog.contains("onKeepEditing = { confirmDiscard = false }"))
+        assertTrue(riderDialog.contains("onDiscard = { confirmDiscard = false; onDismiss() }"))
+    }
+
+    @Test
     fun `REG-RIDER-EDIT-SAVE-001 guardar Rider sigue persistiendo normalmente`() {
         val c = MandadosController(context)
         val id = c.saveRider(
@@ -137,6 +154,35 @@ class DialogDismissPolicyTest {
         assertEquals("2345550199", persisted.phone)
         assertEquals("content://dni-front", persisted.documents.dniFrontUri)
         assertEquals(2, persisted.maxConcurrentOrdersOverride)
+    }
+
+    @Test
+    fun `REG-RIDER-EDIT-SAVE-001 fallo de save no cierra Rider dialog`() {
+        val operationsSource = projectSource("src/main/java/ar/com/mandados/app/OperationsScreens.kt")
+        val adminScreen = operationsSource
+            .substringAfter("internal fun RidersAdminScreenV2(")
+            .substringBefore("private fun RiderEditDialog(")
+        val riderDialog = operationsSource
+            .substringAfter("private fun RiderEditDialog(")
+            .substringBefore("private fun RiderDocumentsDialog(")
+
+        assertTrue(adminScreen.contains("if (savedId != null)"))
+        assertTrue(adminScreen.contains("editOpen = false"))
+        assertTrue(adminScreen.contains("} else {\n                    false"))
+        assertTrue(riderDialog.contains("val saved = onSave("))
+        assertTrue(riderDialog.contains("if (!saved) saveError ="))
+        assertFalse(riderDialog.contains("if (!saved) onDismiss()"))
+    }
+
+    private fun projectSource(relativePath: String): String {
+        val candidates = listOf(
+            File(relativePath),
+            File("app/$relativePath"),
+            File("../app/$relativePath")
+        )
+        val file = candidates.firstOrNull { it.isFile }
+            ?: error("No se encontró source de regresión: $relativePath")
+        return file.readText()
     }
 
     private fun sampleRider(): RiderProfile = RiderProfile(
