@@ -107,6 +107,11 @@ private val MandadosDarkColors = darkColorScheme(
     onErrorContainer = Color(0xFFFFDAD7)
 )
 
+private val ReceptionEnabledGreenLight = Color(0xFF146C2E)
+private val ReceptionEnabledGreenDark = Color(0xFF6DD58C)
+private val ReceptionPausedRedLight = Color(0xFFB3261E)
+private val ReceptionPausedRedDark = Color(0xFFFFB4AB)
+
 @Composable
 fun MandadosApp() {
     val context = LocalContext.current
@@ -1557,6 +1562,9 @@ private fun AdminScreen(
     onLegal: () -> Unit
 ) {
     val cfg = c.config
+    val darkReceptionPalette = MaterialTheme.colorScheme.background == MandadosDarkColors.background
+    val receptionEnabledGreen = if (darkReceptionPalette) ReceptionEnabledGreenDark else ReceptionEnabledGreenLight
+    val receptionPausedRed = if (darkReceptionPalette) ReceptionPausedRedDark else ReceptionPausedRedLight
     var editingZoneId by rememberSaveable { mutableStateOf<String?>(null) }
     var newZoneOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -1607,11 +1615,22 @@ private fun AdminScreen(
             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (cfg.acceptingOrders) "✓ HABILITADA" else "⛔ PAUSADA",
-                    color = if (cfg.acceptingOrders) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    color = if (cfg.acceptingOrders) receptionEnabledGreen else receptionPausedRed,
                     fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier.weight(1f)
                 )
-                Switch(cfg.acceptingOrders, { c.updateConfig(c.config.copy(acceptingOrders = it)) })
+                Switch(
+                    checked = cfg.acceptingOrders,
+                    onCheckedChange = { c.updateConfig(c.config.copy(acceptingOrders = it)) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = MaterialTheme.colorScheme.surface,
+                        checkedTrackColor = receptionEnabledGreen,
+                        checkedBorderColor = receptionEnabledGreen,
+                        uncheckedThumbColor = MaterialTheme.colorScheme.surface,
+                        uncheckedTrackColor = receptionPausedRed,
+                        uncheckedBorderColor = receptionPausedRed
+                    )
+                )
             }
         }
         Field("Mensaje cuando la recepción está pausada", cfg.closedMessage, singleLine = false) {
