@@ -95,6 +95,7 @@ class MapSelectionPolicyTest {
         val gradle = projectFile("app/build.gradle.kts")
         val manifest = projectFile("app/src/main/AndroidManifest.xml")
         val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val picker = projectFile("app/src/main/java/ar/com/mandados/app/MapLocationPicker.kt")
 
         assertTrue(gradle.contains("org.maplibre.compose:maplibre-compose:0.19.0"))
         assertTrue(gradle.contains("org.maplibre.compose:maplibre-compose-runtime-opengl-android:0.19.0"))
@@ -102,37 +103,37 @@ class MapSelectionPolicyTest {
         assertFalse(gradle.contains("com.google.maps.android:maps-compose"))
         assertFalse(manifest.contains("com.google.android.geo.API_KEY"))
         assertFalse(manifest.contains("MAPS_API_KEY"))
-        assertTrue(app.contains("https://tiles.openfreemap.org/styles/liberty"))
-        assertTrue(app.contains("MaplibreMap("))
+        assertTrue(picker.contains("https://tiles.openfreemap.org/styles/liberty"))
+        assertTrue(picker.contains("MaplibreMap("))
         assertFalse(app.contains("com.google.maps"))
+        assertFalse(picker.contains("com.google.maps"))
     }
 
     @Test
     fun `REG-MAPS-SELECTION-001 selector usa callback geografico de MapInteractions`() {
-        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val picker = projectFile("app/src/main/java/ar/com/mandados/app/MapLocationPicker.kt")
 
-        assertTrue(app.contains("MapInteractions"))
-        assertTrue(app.contains("callbacks {"))
-        assertTrue(app.contains("click {"))
-        assertTrue(app.contains("event.position?.let"))
-        assertTrue(app.contains("geoPointFromMapCoordinates(position.latitude, position.longitude)"))
-        assertFalse(app.contains("draggable = true"))
-        assertFalse(app.contains("arrastralo"))
+        assertTrue(picker.contains("MapInteractions"))
+        assertTrue(picker.contains("callbacks {"))
+        assertTrue(picker.contains("click {"))
+        assertTrue(picker.contains("event.position?.let"))
+        assertTrue(picker.contains("geoPointFromMapCoordinates(position.latitude, position.longitude)"))
+        assertFalse(picker.contains("draggable = true"))
+        assertFalse(picker.contains("arrastralo"))
     }
 
     @Test
     fun `REG-MAPS-LOCATION-PERMISSION-001 permiso denegado deja seleccion manual disponible`() {
-        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val picker = projectFile("app/src/main/java/ar/com/mandados/app/MapLocationPicker.kt")
 
-        assertTrue(app.contains("Permiso de ubicación no concedido. Podés mover el pin manualmente."))
-        assertTrue(app.contains("MaplibreMap("))
-        assertTrue(app.contains("enabled = target != null"))
+        assertTrue(picker.contains("Permiso de ubicación no concedido. Podés mover el pin manualmente."))
+        assertTrue(picker.contains("MaplibreMap("))
+        assertTrue(picker.contains("enabled = target != null"))
     }
 
     @Test
     fun `REG-MAPS-ATTRIBUTION-001 selector conserva overlay predeterminado de MapLibre`() {
-        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
-        val picker = app.substringAfter("private fun LocationPickerScreen(").substringBefore("private fun Field(")
+        val picker = projectFile("app/src/main/java/ar/com/mandados/app/MapLocationPicker.kt")
 
         assertTrue(picker.contains("MaplibreMap("))
         assertFalse(picker.contains("overlay ="))
