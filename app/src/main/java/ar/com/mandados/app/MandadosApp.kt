@@ -240,12 +240,18 @@ private fun MandadosNavigation(controller: MandadosController) {
         Screen.REVIEW -> ReviewScreen(controller, onBack = {
             screen = if (controller.draft.serviceType == ServiceType.DELIVERY) Screen.DELIVERY else Screen.SHOPPING
         }, onSubmit = {
-            val order = controller.createOrder()
-            lastOrderId = order.id
-            if (order.operationMode == OperationMode.SIMPLE_WHATSAPP) {
-                openWhatsApp(context, controller.config.whatsappReceiver, order.whatsappMessage)
+            when (val result = controller.createOrder()) {
+                is OrderCreationResult.Blocked -> result.message
+                is OrderCreationResult.Created -> {
+                    val order = result.order
+                    lastOrderId = order.id
+                    if (order.operationMode == OperationMode.SIMPLE_WHATSAPP) {
+                        openWhatsApp(context, controller.config.whatsappReceiver, order.whatsappMessage)
+                    }
+                    screen = Screen.SUBMITTED
+                    null
+                }
             }
-            screen = Screen.SUBMITTED
         })
         Screen.SUBMITTED -> SubmittedScreen(controller, lastOrderId, onHome = { screen = Screen.HOME }, onWhatsApp = { id ->
             controller.order(id)?.let { openWhatsApp(context, controller.config.whatsappReceiver, it.whatsappMessage) }
@@ -1117,9 +1123,7 @@ private fun ShoppingForm(
                 val current = c.draft
                 c.draft = if (current.sameDeliveryAsPrePickup) {
                     current.copy(prePickupLocation = null, destinationLocation = null)
-                } else {
-                    current.copy(prePickupLocation = null)
-                }
+                } else current.copy(prePickupLocation = null)
             }
         }
 
@@ -1187,11 +1191,12 @@ private fun ShoppingForm(
 }
 
 @Composable
-private fun ReviewScreen(c: MandadosController, onBack: () -> Unit, onSubmit: () -> Unit) {
+private fun ReviewScreen(c: MandadosController, onBack: () -> Unit, onSubmit: () -> String?) {
     val context = LocalContext.current
     val p = c.pricing()
     val pendingLegal = c.requiredLegalDocumentsForCustomer()
     var legalAccepted by rememberSaveable(pendingLegal.joinToString("|") { it.id }) { mutableStateOf(pendingLegal.isEmpty()) }
+    var submitError by rememberSaveable { mutableStateOf("") }
 
     Page("Confirmar solicitud", onBack) {
         Text(
@@ -1239,6 +1244,14 @@ private fun ReviewScreen(c: MandadosController, onBack: () -> Unit, onSubmit: ()
             }
         }
 
+        if (!c.config.acceptingOrders) {
+            Spacer(Modifier.height(12.dp))
+            AssistBox(c.config.closedMessage)
+        } else if (submitError.isNotBlank()) {
+            Spacer(Modifier.height(12.dp))
+            AssistBox(submitError)
+        }
+
         Spacer(Modifier.height(12.dp))
         AssistBox(
             if (c.config.operationMode == OperationMode.SIMPLE_WHATSAPP)
@@ -1249,12 +1262,12 @@ private fun ReviewScreen(c: MandadosController, onBack: () -> Unit, onSubmit: ()
         Spacer(Modifier.height(12.dp))
         Button(
             onClick = {
-                if (legalAccepted) {
+                if (legalAccepted && c.config.acceptingOrders) {
                     c.acceptRequiredLegalDocuments()
-                    onSubmit()
+                    submitError = onSubmit().orEmpty()
                 }
             },
-            enabled = legalAccepted,
+            enabled = legalAccepted && c.config.acceptingOrders,
             modifier = Modifier.fillMaxWidth()
         ) { Text("ENVIAR SOLICITUD") }
     }
@@ -1584,11 +1597,22 @@ private fun AdminScreen(
         EnumRadio("Oscuro", cfg.themeMode == ThemeMode.DARK) { c.updateConfig(c.config.copy(themeMode = ThemeMode.DARK)) }
 
         Spacer(Modifier.height(14.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Tomando pedidos", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
-            Switch(cfg.acceptingOrders, { c.updateConfig(c.config.copy(acceptingOrders = it)) })
+        Text("RECEPCIÓN DE NUEVAS SOLICITUDES", fontWeight = FontWeight.Bold)
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+        ) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (cfg.acceptingOrders) "✓ HABILITADA" else "⛔ PAUSADA",
+                    color = if (cfg.acceptingOrders) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(cfg.acceptingOrders, { c.updateConfig(c.config.copy(acceptingOrders = it)) })
+            }
         }
-        Field("Mensaje cuando no disponible", cfg.closedMessage, singleLine = false) {
+        Field("Mensaje cuando la recepción está pausada", cfg.closedMessage, singleLine = false) {
             c.updateConfig(c.config.copy(closedMessage = it))
         }
 
