@@ -11,7 +11,7 @@ val hasPrivateAlphaSigning = listOf(alphaKeystorePath, alphaKeystorePassword, al
 
 android {
     namespace = "ar.com.mandados.app"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "ar.com.mandados.app"

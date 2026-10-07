@@ -115,6 +115,25 @@ class MapSelectionPolicyTest {
     }
 
     @Test
+    fun `REG-MAPS-OSS-001 compile SDK y workflows quedan compatibles con MapLibre 0190`() {
+        val gradle = projectFile("app/build.gradle.kts")
+        val workflows = listOf(
+            projectFile(".github/workflows/ci.yml"),
+            projectFile(".github/workflows/codeql.yml"),
+            projectFile(".github/workflows/alpha-apk.yml")
+        )
+
+        assertTrue(gradle.contains("compileSdk = 37"))
+        assertTrue(gradle.contains("targetSdk = 36"))
+        assertTrue(gradle.contains("minSdk = 26"))
+        workflows.forEach { workflow ->
+            assertTrue(workflow.contains("platforms;android-37"))
+            assertTrue(workflow.contains("build-tools;36.0.0"))
+            assertFalse(workflow.contains("platforms;android-36"))
+        }
+    }
+
+    @Test
     fun `REG-MAPS-SELECTION-001 selector usa callback geografico de MapInteractions`() {
         val picker = projectFile("app/src/main/java/ar/com/mandados/app/MapLocationPicker.kt")
 
