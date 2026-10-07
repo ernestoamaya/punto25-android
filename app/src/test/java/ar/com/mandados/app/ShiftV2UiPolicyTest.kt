@@ -47,6 +47,29 @@ class ShiftV2UiPolicyTest {
         assertFalse(source.contains("Text(\"business key"))
     }
 
+    @Test
+    fun `REG-SHIFT-WIRING-001 entry points operativos enrutan exclusivamente a UI v2`() {
+        val app = projectSource("src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val operations = projectSource("src/main/java/ar/com/mandados/app/OperationsScreens.kt")
+        val routing = projectSource("src/main/java/ar/com/mandados/app/ShiftOperationalRouting.kt")
+
+        assertTrue(app.contains("Screen.ADMIN_SHIFTS -> AdminShiftsScreen("))
+        assertTrue(operations.contains("RiderSection.SHIFTS -> RiderShifts(c, rider)"))
+        assertTrue(routing.contains("AdminShiftsV2Screen(c, onBack)"))
+        assertTrue(routing.contains("RiderShiftsV2(c, rider)"))
+
+        assertTrue(operations.contains("internal fun AdminShiftsLegacyScreen("))
+        assertTrue(operations.contains("private fun RiderShiftsLegacy("))
+        assertFalse(operations.contains("internal fun AdminShiftsScreen("))
+        assertFalse(operations.contains("private fun RiderShifts("))
+
+        assertFalse(routing.contains("shiftOccurrences("))
+        assertFalse(routing.contains("shiftReservations"))
+        assertFalse(routing.contains("addShiftTemplatesBulk("))
+        assertFalse(routing.contains("addSpecificDateShifts("))
+        assertFalse(routing.contains("reserveShift(rider.id, shift.id,"))
+    }
+
     private fun projectSource(relativePath: String): String {
         val candidates = listOf(
             File(relativePath),

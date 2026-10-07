@@ -1190,7 +1190,7 @@ private fun RiderTransfers(c: MandadosController, rider: RiderProfile) {
 }
 
 @Composable
-private fun RiderShifts(c: MandadosController, rider: RiderProfile) {
+private fun RiderShiftsLegacy(c: MandadosController, rider: RiderProfile) {
     val today = LocalDate.now()
     val now = LocalDateTime.now()
     var confirmReservationId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1408,7 +1408,7 @@ private fun RiderProfileView(c: MandadosController, rider: RiderProfile, onSecti
 }
 
 @Composable
-internal fun AdminShiftsScreen(c: MandadosController, onBack: () -> Unit) {
+internal fun AdminShiftsLegacyScreen(c: MandadosController, onBack: () -> Unit) {
     val selectedDays = remember { mutableStateMapOf<Int, Boolean>() }
     val expandedDates = remember { mutableStateMapOf<String, Boolean>() }
     var ranges by remember { mutableStateOf(listOf("" to "")) }
