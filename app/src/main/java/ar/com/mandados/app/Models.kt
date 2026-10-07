@@ -369,7 +369,7 @@ fun defaultZones(): List<ZoneConfig> = listOf(
     ZoneConfig("quevedo", "Barrio Quevedo", "", "BARRIOS"),
     ZoneConfig("lebensohn_36_r46", "Acceso Lebensohn entre Calle 36 y Ruta 46", "", "ACCESOS Y RUTAS"),
     ZoneConfig("lebensohn_r46_r51", "Acceso Lebensohn entre Ruta 46 y Ruta 51", "", "ACCESOS Y RUTAS"),
-    ZoneConfig("illia_parque", "Acceso Illia hasta Parque industrial", "", "BARRIOS"),
+    ZoneConfig("illia_parque", "Acceso Illia hasta Parque industrial", "", "ACCESOS Y RUTAS"),
     ZoneConfig("illia_r46", "Acceso Illia hasta Ruta 46", "", "ACCESOS Y RUTAS"),
     ZoneConfig("ruta46_illia_lebensohn", "Ruta 46 entre Acceso Illia y Acceso Lebensohn", "", "ACCESOS Y RUTAS")
 )
