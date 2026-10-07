@@ -89,6 +89,14 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-DENIAL-001 | Las denegaciones de nuevo trabajo exponen un motivo tipado utilizable por UI, incluyendo documentación. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-DENIAL-001…` |
 | REG-RIDER-DENIAL-002 | Los wrappers usados por UI publican el motivo tipado y éste se transforma en un mensaje entendible, no en no-op silencioso. | `RiderEligibilityBoundaryRegressionTest.REG-RIDER-DENIAL-002…` |
 | REG-RIDER-ADMIN-001 | Las acciones/vistas administrativas no crean sesión Rider ni habilitan el workspace self-service. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ADMIN-001…` |
+| REG-PACKAGING-SHA-001 | Un SHA completo válido perteneciente al historial confiable de `main` es aceptado como target. | `.github/workflows/alpha-apk.yml` — `Validate target SHA and trusted main ancestry` |
+| REG-PACKAGING-SHA-002 | Un SHA inexistente falla cerrado antes de secretos, compilación, firma y publicación. | `.github/workflows/alpha-apk.yml` — self-test `NONEXISTENT_SHA` |
+| REG-PACKAGING-SHA-003 | Un commit existente fuera de la ancestry autorizada de `main` falla cerrado. | `.github/workflows/alpha-apk.yml` — self-test `SYNTHETIC_NON_MAIN_SHA` |
+| REG-PACKAGING-CHECKOUT-001 | El commit realmente compilado coincide exactamente con `target_sha`. | `.github/workflows/alpha-apk.yml` — `Checkout exact target SHA` |
+| REG-PACKAGING-SIGN-001 | El APK candidato pasa `apksigner verify` antes de publicarse. | `.github/workflows/alpha-apk.yml` — `Verify signature, hash and provenance` |
+| REG-PACKAGING-HASH-001 | Se genera `SHA256SUMS.txt` para el APK exacto publicado. | `.github/workflows/alpha-apk.yml` — `Verify signature, hash and provenance` |
+| REG-PACKAGING-PROVENANCE-001 | El artifact vincula repositorio, workflow source, `target_sha`, checkout real, run, versión, applicationId, timestamp y SHA-256. | `.github/workflows/alpha-apk.yml` — `BUILD_PROVENANCE.txt` |
+| REG-PACKAGING-SECRETS-001 | Los secretos Alpha se validan sin imprimir valores y el artifact contiene sólo APK, hash y provenance no sensible. | `.github/workflows/alpha-apk.yml` — validación de firma + upload explícito |
 
 | REG-ZONE-PRESENTATION-001 | Las zonas se ordenan sólo para presentación por categoría y nombre, ignorando mayúsculas/tildes, con estabilidad determinista y sin mutar el orden persistido. | `ZonePresentationTest` |
 | REG-DIALOG-DISMISS-001 | Las ventanas propias de Punto25 no se cierran ni ejecutan acciones por toque exterior; Atrás sigue habilitado salvo bloqueos deliberados o protección de cambios pendientes. | `DialogDismissPolicyTest.REG-DIALOG-DISMISS-001…` |
