@@ -229,7 +229,9 @@ class MandadosController(context: Context) {
         return PricingResult(false, baseZone.price, baseZone.name, pre, rain, baseZone.price + pre + rain)
     }
 
-    fun createOrder(): LocalOrder {
+    fun createOrder(): OrderCreationResult {
+        if (!config.acceptingOrders) return OrderCreationResult.Blocked(config.closedMessage)
+
         val c = requireNotNull(customer)
         val p = pricing(draft)
         val id = newPublicCode()
@@ -291,7 +293,7 @@ class MandadosController(context: Context) {
         orders = listOf(order) + orders
         store.saveOrders(orders)
         if (order.operationMode == OperationMode.MULTI_RIDER) ensurePaymentRecord(order)
-        return order
+        return OrderCreationResult.Created(order)
     }
 
     fun cancelOrderByCustomer(id: String): Boolean {

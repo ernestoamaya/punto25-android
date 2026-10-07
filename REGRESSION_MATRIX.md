@@ -35,6 +35,12 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-AUTH-003 | La lectura de pedidos activos queda protegida por sesión: Rider A ve sólo los propios y nunca los de Rider B. | `RiderEligibilityBoundaryRegressionTest.REG-RIDER-AUTH-003…` |
 | REG-SHIFT-AUTH-001 | Rider A no puede reservar ni cancelar turnos actuando como Rider B. | `RiderSessionAndTipIntegrationTest.REG-SHIFT-AUTH-001…` |
 | REG-ORDER-AUTH-001 | Rider A no puede tomar ni modificar pedidos actuando como Rider B; las acciones administrativas explícitas quedan atribuidas a `ADMIN`. | `RiderSessionAndTipIntegrationTest.REG-ORDER-AUTH-001…` |
+| REG-ORDER-RECEPTION-001 | Con recepción pausada, el dominio rechaza una nueva solicitud sin alterar pedidos, pagos, eventos de pedidos preexistentes ni el draft, incluso tras recarga. | `OrderReceptionPolicyTest.REG-ORDER-RECEPTION-001…` |
+| REG-ORDER-RECEPTION-002 | Un flujo iniciado mientras estaba habilitado falla cerrado si Administración pausa antes del envío final. | `OrderReceptionPolicyTest.REG-ORDER-RECEPTION-002…` |
+| REG-ORDER-RECEPTION-003 | Pausar nuevas solicitudes no bloquea operaciones válidas sobre pedidos ya existentes. | `OrderReceptionPolicyTest.REG-ORDER-RECEPTION-003…` |
+| REG-ORDER-RECEPTION-004 | Reactivar la recepción vuelve a permitir la creación normal de solicitudes. | `OrderReceptionPolicyTest.REG-ORDER-RECEPTION-004…` |
+| REG-ORDER-RECEPTION-005 | `closedMessage` personalizado persiste, se devuelve en el rechazo y no se sobrescribe al alternar HABILITADA/PAUSADA. | `OrderReceptionPolicyTest.REG-ORDER-RECEPTION-005…` |
+| REG-ORDER-RECEPTION-UI-001 | Admin expone estado textual HABILITADA/PAUSADA y Review consulta `acceptingOrders` actual, muestra `closedMessage` y deshabilita envío durante la pausa. | `OrderReceptionPolicyTest.REG-ORDER-RECEPTION-UI-001…` |
 | REG-RIDER-ELIG-001 | Fixture Rider persistido previo a dev3.8, activo, aprobado y con documentación obligatoria aprobada conserva login, Turnos, reserva y Disponibilidad. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ELIG-001…` |
 | REG-RIDER-ELIG-002 | Un Rider creado con el modelo actual, activo, aprobado y con documentación obligatoria aprobada tiene la misma elegibilidad operativa. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ELIG-002…` |
 | REG-RIDER-ELIG-003 | La sesión Rider A nunca habilita elegibilidad ni operaciones self-service de Rider B. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ELIG-003…` |

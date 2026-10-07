@@ -91,7 +91,7 @@ data class LegalProfile(
 
 data class AdminConfig(
     val acceptingOrders: Boolean = true,
-    val closedMessage: String = "En este momento no estamos tomando pedidos.",
+    val closedMessage: String = "En este momento no estamos recibiendo nuevas solicitudes. Podés seguir consultando y gestionando las que ya tenés en curso. Disculpá las molestias.",
     val maxPurchaseAmount: Int = 50000,
     val maxWeightKg: Int = 5,
     val rainEnabled: Boolean = false,
@@ -245,6 +245,11 @@ data class LocalOrder(
     val deliveryPayment: DeliveryPaymentMethod = DeliveryPaymentMethod.CASH,
     val notes: String = ""
 )
+
+sealed interface OrderCreationResult {
+    data class Created(val order: LocalOrder) : OrderCreationResult
+    data class Blocked(val message: String) : OrderCreationResult
+}
 
 data class ShiftTemplate(
     val id: String,
