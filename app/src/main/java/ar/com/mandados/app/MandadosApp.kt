@@ -139,6 +139,22 @@ private fun MandadosNavigation(controller: MandadosController) {
     var selectedRiderId by rememberSaveable { mutableStateOf<String?>(null) }
     var mapTarget by rememberSaveable { mutableStateOf<MapTarget?>(null) }
     var lastRootBackAt by rememberSaveable { mutableStateOf(0L) }
+    val adminSession = remember { AdminAccessSession() }
+    val protectedAdminScreens = remember {
+        setOf(
+            Screen.ADMIN,
+            Screen.ADMIN_ORDERS,
+            Screen.ADMIN_ORDER_DETAIL,
+            Screen.ADMIN_REPORTS,
+            Screen.ADMIN_SHIFTS,
+            Screen.ADMIN_PAYMENTS,
+            Screen.ADMIN_LEGAL,
+            Screen.RIDERS,
+            Screen.RIDER_ADMIN_VIEW
+        )
+    }
+    val requiresAdminReauthorization = screen in protectedAdminScreens &&
+        (!adminSession.authorized || !GoogleAuthIntegration.hasCurrentUser(context))
 
     fun openMap(target: MapTarget) {
         mapTarget = target
@@ -152,6 +168,7 @@ private fun MandadosNavigation(controller: MandadosController) {
     }
 
     fun navigateBack() {
+        if (screen == Screen.ADMIN || screen == Screen.ADMIN_LOGIN) adminSession.clear()
         screen = when (screen) {
             Screen.WHATSAPP_VERIFY, Screen.RIDER_ACCESS -> Screen.REGISTER
             Screen.DELIVERY, Screen.SHOPPING, Screen.HISTORY, Screen.CUSTOMER_PROFILE, Screen.CUSTOMER_SUPPORT, Screen.ADMIN_LOGIN -> Screen.HOME
@@ -176,7 +193,10 @@ private fun MandadosNavigation(controller: MandadosController) {
     }
 
     BackHandler(enabled = true) {
-        if (screen == Screen.HOME || screen == Screen.REGISTER) {
+        if (requiresAdminReauthorization) {
+            adminSession.clear()
+            screen = Screen.HOME
+        } else if (screen == Screen.HOME || screen == Screen.REGISTER) {
             val now = SystemClock.elapsedRealtime()
             if (now - lastRootBackAt <= 2_000L) {
                 (context as? Activity)?.finish()
@@ -193,7 +213,18 @@ private fun MandadosNavigation(controller: MandadosController) {
         }
     }
 
-    when (screen) {
+    if (requiresAdminReauthorization) {
+        AdminLoginScreen(
+            onBack = {
+                adminSession.clear()
+                screen = Screen.HOME
+            },
+            onSuccess = {
+                adminSession.apply(AdminAccessResult.AUTHORIZED)
+                screen = Screen.ADMIN
+            }
+        )
+    } else when (screen) {
         Screen.REGISTER -> RegisterScreen(
             controller,
             onContinue = { screen = Screen.WHATSAPP_VERIFY },
@@ -223,8 +254,12 @@ private fun MandadosNavigation(controller: MandadosController) {
             onHistory = { screen = Screen.HISTORY },
             onProfile = { screen = Screen.CUSTOMER_PROFILE },
             onSupport = { screen = Screen.CUSTOMER_SUPPORT },
-            onAdmin = { screen = Screen.ADMIN_LOGIN },
+            onAdmin = {
+                adminSession.clear()
+                screen = Screen.ADMIN_LOGIN
+            },
             onLogout = {
+                adminSession.clear()
                 GoogleAuthIntegration.signOut(context)
                 controller.logoutCustomer()
                 screen = Screen.REGISTER
@@ -265,10 +300,22 @@ private fun MandadosNavigation(controller: MandadosController) {
         Screen.ORDER_DETAIL -> OrderDetailScreen(controller, selectedOrderId, onBack = { screen = Screen.HISTORY }, onWhatsApp = { order -> openWhatsApp(context, controller.config.whatsappReceiver, order.whatsappMessage) })
         Screen.CUSTOMER_PROFILE -> CustomerProfileScreen(controller, onBack = { screen = Screen.HOME }, onSupport = { screen = Screen.CUSTOMER_SUPPORT })
         Screen.CUSTOMER_SUPPORT -> CustomerSupportScreen(controller, onBack = { screen = Screen.HOME })
-        Screen.ADMIN_LOGIN -> AdminLoginScreen(onBack = { screen = Screen.HOME }, onSuccess = { screen = Screen.ADMIN })
+        Screen.ADMIN_LOGIN -> AdminLoginScreen(
+            onBack = {
+                adminSession.clear()
+                screen = Screen.HOME
+            },
+            onSuccess = {
+                adminSession.apply(AdminAccessResult.AUTHORIZED)
+                screen = Screen.ADMIN
+            }
+        )
         Screen.ADMIN -> AdminScreen(
             controller,
-            onBack = { screen = Screen.HOME },
+            onBack = {
+                adminSession.clear()
+                screen = Screen.HOME
+            },
             onOrders = { screen = Screen.ADMIN_ORDERS },
             onRiders = { screen = Screen.RIDERS },
             onReports = { screen = Screen.ADMIN_REPORTS },
@@ -1526,27 +1573,39 @@ private fun OrderDetailScreen(c: MandadosController, id: String?, onBack: () -> 
 
 @Composable
 private fun AdminLoginScreen(onBack: () -> Unit, onSuccess: () -> Unit) {
-    val expectedPin = BuildConfig.ALPHA_ADMIN_PIN
-    var pin by rememberSaveable { mutableStateOf("") }
-    var error by rememberSaveable { mutableStateOf("") }
+    val context = LocalContext.current
+    var attempt by remember { mutableIntStateOf(0) }
+    var result by remember { mutableStateOf<AdminAccessResult?>(null) }
+
+    LaunchedEffect(attempt) {
+        result = null
+        val checked = AdminAccessApi.check(context)
+        result = checked
+        if (checked == AdminAccessResult.AUTHORIZED) onSuccess()
+    }
+
     Page("Administración", onBack) {
-        OutlinedTextField(pin, { pin = it.filter(Char::isDigit).take(8); error = "" }, label = { Text("PIN Alpha") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), visualTransformation = PasswordVisualTransformation(), singleLine = true,
-            enabled = expectedPin.isNotBlank())
-        if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = { if (expectedPin.isNotBlank() && pin == expectedPin) onSuccess() else error = "PIN incorrecto" },
-            enabled = expectedPin.isNotBlank(),
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("ENTRAR") }
-        Spacer(Modifier.height(12.dp))
-        AssistBox(
-            if (expectedPin.isBlank())
-                "Administración local deshabilitada en esta compilación."
-            else
-                "Acceso Admin local exclusivo de Alpha. La seguridad productiva requerirá autenticación y autorización del backend."
-        )
+        when (result) {
+            null -> {
+                CircularProgressIndicator()
+                Text("Verificando acceso…", modifier = Modifier.padding(top = 12.dp))
+            }
+            AdminAccessResult.AUTHORIZED -> Text("Acceso autorizado.")
+            AdminAccessResult.UNAUTHORIZED -> {
+                Text("Acceso no autorizado.", color = MaterialTheme.colorScheme.error)
+                OutlinedButton(
+                    onClick = { attempt += 1 },
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                ) { Text("VOLVER A VERIFICAR") }
+            }
+            AdminAccessResult.UNAVAILABLE -> {
+                Text("Servicio temporalmente no disponible.", color = MaterialTheme.colorScheme.error)
+                OutlinedButton(
+                    onClick = { attempt += 1 },
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                ) { Text("REINTENTAR") }
+            }
+        }
     }
 }
 

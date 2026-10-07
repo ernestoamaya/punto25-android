@@ -84,10 +84,49 @@ internal object GoogleAuthIntegration {
         FirebaseAuth.getInstance(app).signOut()
     }
 
+    fun hasCurrentUser(context: Context): Boolean {
+        if (!isConfigured()) return false
+        val app = runCatching { ensureFirebase(context) }.getOrNull() ?: return false
+        return FirebaseAuth.getInstance(app).currentUser != null
+    }
+
     suspend fun currentIdToken(context: Context): String? {
         if (!isConfigured()) return null
         val app = runCatching { ensureFirebase(context) }.getOrNull() ?: return null
         return FirebaseAuth.getInstance(app).currentUser?.getIdToken(false)?.await()?.token
+    }
+}
+
+internal object AdminAccessApi {
+    suspend fun check(context: Context): AdminAccessResult = evaluateAdminAccess(
+        tokenProvider = { GoogleAuthIntegration.currentIdToken(context) },
+        requester = { token -> request(token) }
+    )
+
+    private suspend fun request(bearer: String): AdminAccessHttpResult = withContext(Dispatchers.IO) {
+        val base = BuildConfig.PUNTO25_API_BASE_URL.trimEnd('/')
+        check(base.startsWith("https://")) { "El backend de producción debe usar HTTPS." }
+        val connection = (URL(base + "/v1/admin/access").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 12_000
+            readTimeout = 12_000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Authorization", "Bearer " + bearer)
+            useCaches = false
+        }
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val authorized = if (code == 200) {
+                runCatching { JSONObject(text).optBoolean("authorized", false) }.getOrDefault(false)
+            } else {
+                null
+            }
+            AdminAccessHttpResult(code, authorized)
+        } finally {
+            connection.disconnect()
+        }
     }
 }
 
