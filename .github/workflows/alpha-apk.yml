@@ -1,0 +1,383 @@
+name: Alpha APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Full 40-character commit SHA from the safe trusted main history"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpha-apk-${{ github.repository }}-${{ inputs.target_sha }}
+  cancel-in-progress: false
+
+jobs:
+  signed-alpha-apk:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate target SHA and trusted main ancestry
+        shell: bash
+        env:
+          REQUESTED_TARGET_SHA: ${{ inputs.target_sha }}
+          SAFE_RELEASE_FLOOR_SHA: de693c0158b3edb3a76bc285bf53fe02060e8eff
+          PRE_AUTH_MAIN_SHA: 0ebd4246ebb28c59c8a2f7b631afd6c64721b978
+        run: |
+          set -euo pipefail
+
+          validate_target() {
+            local candidate="$1"
+            [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || return 10
+            [[ "$(git cat-file -t "$candidate" 2>/dev/null || true)" == "commit" ]] || return 11
+            git merge-base --is-ancestor "$candidate" refs/remotes/origin/main || return 12
+            git merge-base --is-ancestor "$SAFE_RELEASE_FLOOR_SHA" "$candidate" || return 13
+          }
+
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --force --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+
+          WORKFLOW_SOURCE_SHA="$GITHUB_SHA"
+          TRUSTED_MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+
+          [[ "$WORKFLOW_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "Workflow source SHA is not canonical." >&2
+            exit 1
+          }
+          [[ "$(git cat-file -t "$WORKFLOW_SOURCE_SHA" 2>/dev/null || true)" == "commit" ]] || {
+            echo "Workflow source SHA is not a commit." >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$WORKFLOW_SOURCE_SHA" refs/remotes/origin/main || {
+            echo "Workflow source is not in trusted main history." >&2
+            exit 1
+          }
+          [[ "$(git cat-file -t "$SAFE_RELEASE_FLOOR_SHA" 2>/dev/null || true)" == "commit" ]] || {
+            echo "Safe release floor commit is unavailable." >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$SAFE_RELEASE_FLOOR_SHA" refs/remotes/origin/main || {
+            echo "Trusted main no longer contains the safe release floor." >&2
+            exit 1
+          }
+
+          echo "Workflow source SHA: $WORKFLOW_SOURCE_SHA"
+          echo "Requested target SHA: $REQUESTED_TARGET_SHA"
+          echo "Trusted main SHA: $TRUSTED_MAIN_SHA"
+          echo "Safe release floor SHA: $SAFE_RELEASE_FLOOR_SHA"
+
+          # REG-PACKAGING-SHA-001: current trusted main HEAD is accepted.
+          validate_target "$TRUSTED_MAIN_SHA" || {
+            echo "REG-PACKAGING-SHA-001 failed: trusted main HEAD was rejected." >&2
+            exit 1
+          }
+
+          # REG-PACKAGING-SHA-002: a syntactically valid but nonexistent SHA is rejected.
+          NONEXISTENT_SHA="0000000000000000000000000000000000000000"
+          if validate_target "$NONEXISTENT_SHA"; then
+            echo "REG-PACKAGING-SHA-002 failed: nonexistent SHA was accepted." >&2
+            exit 1
+          fi
+
+          # REG-PACKAGING-SHA-003: an existing commit object outside main ancestry is rejected.
+          SYNTHETIC_TREE="$(git rev-parse refs/remotes/origin/main^{tree})"
+          SYNTHETIC_NON_MAIN_SHA="$(
+            printf '%s\n' 'REG-PACKAGING-SHA-003 synthetic non-main commit' |
+              GIT_AUTHOR_NAME='Punto25 Packaging Regression' \
+              GIT_AUTHOR_EMAIL='packaging-regression@localhost' \
+              GIT_COMMITTER_NAME='Punto25 Packaging Regression' \
+              GIT_COMMITTER_EMAIL='packaging-regression@localhost' \
+              git commit-tree "$SYNTHETIC_TREE"
+          )"
+          if validate_target "$SYNTHETIC_NON_MAIN_SHA"; then
+            echo "REG-PACKAGING-SHA-003 failed: non-main commit was accepted." >&2
+            exit 1
+          fi
+
+          # REG-PACKAGING-SAFE-FLOOR-001: historical pre-patch main cannot be signed.
+          if validate_target "$PRE_AUTH_MAIN_SHA"; then
+            echo "REG-PACKAGING-SAFE-FLOOR-001 failed: pre-patch main was accepted." >&2
+            exit 1
+          fi
+
+          if ! validate_target "$REQUESTED_TARGET_SHA"; then
+            echo "Requested target_sha is not an allowed full lowercase commit SHA in safe trusted main history." >&2
+            exit 1
+          fi
+
+          echo "REG-PACKAGING-SHA-001: PASS"
+          echo "REG-PACKAGING-SHA-002: PASS"
+          echo "REG-PACKAGING-SHA-003: PASS"
+          echo "REG-PACKAGING-SAFE-FLOOR-001: PASS"
+          echo "WORKFLOW_SOURCE_SHA=$WORKFLOW_SOURCE_SHA" >> "$GITHUB_ENV"
+          echo "TRUSTED_MAIN_SHA=$TRUSTED_MAIN_SHA" >> "$GITHUB_ENV"
+          echo "SAFE_RELEASE_FLOOR_SHA=$SAFE_RELEASE_FLOOR_SHA" >> "$GITHUB_ENV"
+          echo "TARGET_SHA=$REQUESTED_TARGET_SHA" >> "$GITHUB_ENV"
+
+      - name: Checkout exact target SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach --force "$TARGET_SHA"
+          git clean -ffdx
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+          echo "Checked-out target SHA: $CHECKED_OUT_SHA"
+          if [[ "$CHECKED_OUT_SHA" != "$TARGET_SHA" ]]; then
+            echo "REG-PACKAGING-CHECKOUT-001 failed: checked-out SHA does not match target_sha." >&2
+            exit 1
+          fi
+          echo "REG-PACKAGING-CHECKOUT-001: PASS"
+          echo "CHECKED_OUT_SHA=$CHECKED_OUT_SHA" >> "$GITHUB_ENV"
+
+      - name: Validate safe target structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f app/src/main/java/ar/com/mandados/app/AdminAccessPolicy.kt
+          test -f app/src/test/java/ar/com/mandados/app/AdminAccessPolicyTest.kt
+
+      - name: Resolve target app metadata
+        id: app_metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          VERSION_CODE="$(sed -n 's/^[[:space:]]*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -n 1)"
+          APPLICATION_ID="$(sed -n 's/^[[:space:]]*applicationId = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          if [[ -z "$VERSION_NAME" || -z "$VERSION_CODE" || -z "$APPLICATION_ID" ]]; then
+            echo "Unable to resolve target app metadata." >&2
+            exit 1
+          fi
+          ARTIFACT_NAME="Punto25-v${VERSION_NAME}-${TARGET_SHA}-debug"
+          APK_NAME="${ARTIFACT_NAME}.apk"
+          echo "Target versionName: $VERSION_NAME"
+          echo "Target versionCode: $VERSION_CODE"
+          echo "Target applicationId: $APPLICATION_ID"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "application_id=$APPLICATION_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Java 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - name: Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: '9.3.1'
+          cache-provider: basic
+
+      - name: Validate runtime Alpha configuration
+        shell: bash
+        env:
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          PUNTO25_API_BASE_URL: ${{ secrets.PUNTO25_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          for name in MAPS_API_KEY FIREBASE_API_KEY FIREBASE_APP_ID FIREBASE_PROJECT_ID GOOGLE_WEB_CLIENT_ID PUNTO25_API_BASE_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required Alpha runtime configuration is missing: $name" >&2
+              exit 1
+            fi
+          done
+          [[ "$PUNTO25_API_BASE_URL" == https://* ]] || {
+            echo "PUNTO25_API_BASE_URL must use HTTPS." >&2
+            exit 1
+          }
+          echo "Runtime Alpha configuration names validated without exposing values."
+
+      - name: Validate private Alpha signing configuration
+        shell: bash
+        env:
+          ALPHA_KEYSTORE_B64: ${{ secrets.ALPHA_KEYSTORE_B64 }}
+          ALPHA_KEYSTORE_PASSWORD: ${{ secrets.ALPHA_KEYSTORE_PASSWORD }}
+          ALPHA_KEY_ALIAS: ${{ secrets.ALPHA_KEY_ALIAS }}
+          ALPHA_KEY_PASSWORD: ${{ secrets.ALPHA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in ALPHA_KEYSTORE_B64 ALPHA_KEYSTORE_PASSWORD ALPHA_KEY_ALIAS ALPHA_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Stable Alpha signing configuration is incomplete: $name" >&2
+              exit 1
+            fi
+          done
+          KEYSTORE_PATH="$RUNNER_TEMP/punto25-alpha.jks"
+          printf '%s' "$ALPHA_KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          [[ -s "$KEYSTORE_PATH" ]] || {
+            echo "Decoded Alpha keystore is empty." >&2
+            exit 1
+          }
+
+          if ! EXPECTED_ALPHA_CERT_SHA256="$(
+            keytool -exportcert \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass "$ALPHA_KEYSTORE_PASSWORD" \
+              -alias "$ALPHA_KEY_ALIAS" 2>/dev/null | \
+              sha256sum | awk '{print tolower($1)}'
+          )"; then
+            echo "Unable to export configured Alpha signing certificate." >&2
+            exit 1
+          fi
+          [[ "$EXPECTED_ALPHA_CERT_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Unable to determine configured Alpha signing certificate." >&2
+            exit 1
+          }
+
+          echo "ALPHA_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "EXPECTED_ALPHA_CERT_SHA256=$EXPECTED_ALPHA_CERT_SHA256" >> "$GITHUB_ENV"
+          echo "REG-PACKAGING-SECRETS-001: signing inputs validated without exposing values."
+
+      - name: Unit tests and signed debug build
+        env:
+          ALPHA_KEYSTORE_PASSWORD: ${{ secrets.ALPHA_KEYSTORE_PASSWORD }}
+          ALPHA_KEY_ALIAS: ${{ secrets.ALPHA_KEY_ALIAS }}
+          ALPHA_KEY_PASSWORD: ${{ secrets.ALPHA_KEY_PASSWORD }}
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          PUNTO25_API_BASE_URL: ${{ secrets.PUNTO25_API_BASE_URL }}
+        run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Verify signature, hash and provenance
+        shell: bash
+        env:
+          VERSION_NAME: ${{ steps.app_metadata.outputs.version_name }}
+          VERSION_CODE: ${{ steps.app_metadata.outputs.version_code }}
+          APPLICATION_ID: ${{ steps.app_metadata.outputs.application_id }}
+          APK_NAME: ${{ steps.app_metadata.outputs.apk_name }}
+        run: |
+          set -euo pipefail
+          SOURCE_APK="app/build/outputs/apk/debug/app-debug.apk"
+          APKSIGNER="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/build-tools/36.0.0/apksigner"
+          if [[ ! -f "$SOURCE_APK" ]]; then
+            echo "Expected debug APK was not produced." >&2
+            exit 1
+          fi
+          if [[ ! -x "$APKSIGNER" ]]; then
+            echo "apksigner not found at expected path." >&2
+            exit 1
+          fi
+
+          if ! SIGNER_OUTPUT="$("$APKSIGNER" verify --verbose --print-certs "$SOURCE_APK" 2>&1)"; then
+            echo "REG-PACKAGING-SIGN-001 failed: APK signature verification failed." >&2
+            exit 1
+          fi
+
+          SIGNER_COUNT="$(
+            printf '%s\n' "$SIGNER_OUTPUT" |
+              awk '/^Signer #[0-9]+ certificate SHA-256 digest:[[:space:]]*/ { count++ } END { print count + 0 }'
+          )"
+          if [[ "$SIGNER_COUNT" != "1" ]]; then
+            echo "REG-PACKAGING-SIGN-001 failed: expected exactly one APK signer." >&2
+            exit 1
+          fi
+
+          APK_SIGNER_CERT_SHA256="$(
+            printf '%s\n' "$SIGNER_OUTPUT" |
+              awk -F':[[:space:]]*' '/^Signer #1 certificate SHA-256 digest:[[:space:]]*/ { print $2 }' |
+              tr '[:upper:]' '[:lower:]' |
+              tr -d '[:space:]:'
+          )"
+          [[ "$APK_SIGNER_CERT_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "REG-PACKAGING-SIGN-001 failed: unable to determine APK signer certificate." >&2
+            exit 1
+          }
+          [[ "$EXPECTED_ALPHA_CERT_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "REG-PACKAGING-SIGN-001 failed: configured Alpha certificate identity is unavailable." >&2
+            exit 1
+          }
+
+          certificate_matches() {
+            local expected="$1"
+            local actual="$2"
+            [[ "$expected" =~ ^[0-9a-f]{64}$ ]] &&
+              [[ "$actual" =~ ^[0-9a-f]{64}$ ]] &&
+              [[ "$expected" == "$actual" ]]
+          }
+
+          certificate_matches "$EXPECTED_ALPHA_CERT_SHA256" "$EXPECTED_ALPHA_CERT_SHA256" || {
+            echo "REG-PACKAGING-SIGN-001 failed: certificate comparison rejected the configured Alpha certificate." >&2
+            exit 1
+          }
+          if [[ "${EXPECTED_ALPHA_CERT_SHA256:0:1}" == "0" ]]; then
+            DIFFERENT_CERT_SHA256="1${EXPECTED_ALPHA_CERT_SHA256:1}"
+          else
+            DIFFERENT_CERT_SHA256="0${EXPECTED_ALPHA_CERT_SHA256:1}"
+          fi
+          if certificate_matches "$EXPECTED_ALPHA_CERT_SHA256" "$DIFFERENT_CERT_SHA256"; then
+            echo "REG-PACKAGING-SIGN-001 failed: certificate mismatch regression was accepted." >&2
+            exit 1
+          fi
+
+          certificate_matches "$EXPECTED_ALPHA_CERT_SHA256" "$APK_SIGNER_CERT_SHA256" || {
+            echo "REG-PACKAGING-SIGN-001 failed: APK signer does not match configured Alpha certificate." >&2
+            exit 1
+          }
+          echo "REG-PACKAGING-SIGN-001: PASS"
+
+          cp "$SOURCE_APK" "$APK_NAME"
+          sha256sum "$APK_NAME" > SHA256SUMS.txt
+          APK_SHA256="$(awk '{print $1}' SHA256SUMS.txt)"
+          echo "REG-PACKAGING-HASH-001: PASS"
+          cat SHA256SUMS.txt
+
+          BUILD_TIMESTAMP_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          cat > BUILD_PROVENANCE.txt <<PROVENANCE
+          repository=$GITHUB_REPOSITORY
+          workflow_source_sha=$WORKFLOW_SOURCE_SHA
+          trusted_main_sha=$TRUSTED_MAIN_SHA
+          safe_release_floor_sha=$SAFE_RELEASE_FLOOR_SHA
+          requested_target_sha=$TARGET_SHA
+          checked_out_target_sha=$CHECKED_OUT_SHA
+          workflow_run_id=$GITHUB_RUN_ID
+          workflow_run_attempt=$GITHUB_RUN_ATTEMPT
+          versionName=$VERSION_NAME
+          versionCode=$VERSION_CODE
+          applicationId=$APPLICATION_ID
+          build_timestamp_utc=$BUILD_TIMESTAMP_UTC
+          apk_filename=$APK_NAME
+          apk_sha256=$APK_SHA256
+          PROVENANCE
+
+          [[ "$(grep '^workflow_source_sha=' BUILD_PROVENANCE.txt | cut -d= -f2-)" == "$WORKFLOW_SOURCE_SHA" ]]
+          [[ "$(grep '^trusted_main_sha=' BUILD_PROVENANCE.txt | cut -d= -f2-)" == "$TRUSTED_MAIN_SHA" ]]
+          [[ "$(grep '^requested_target_sha=' BUILD_PROVENANCE.txt | cut -d= -f2-)" == "$TARGET_SHA" ]]
+          [[ "$(grep '^checked_out_target_sha=' BUILD_PROVENANCE.txt | cut -d= -f2-)" == "$TARGET_SHA" ]]
+          echo "REG-PACKAGING-PROVENANCE-001: PASS"
+
+      - name: Upload Alpha APK evidence bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.app_metadata.outputs.artifact_name }}
+          path: |
+            ${{ steps.app_metadata.outputs.apk_name }}
+            SHA256SUMS.txt
+            BUILD_PROVENANCE.txt
+          if-no-files-found: error
+          retention-days: 7
