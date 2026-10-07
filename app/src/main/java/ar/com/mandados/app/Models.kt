@@ -91,7 +91,7 @@ data class LegalProfile(
 
 data class AdminConfig(
     val acceptingOrders: Boolean = true,
-    val closedMessage: String = "En este momento no estamos tomando pedidos.",
+    val closedMessage: String = "En este momento no estamos recibiendo nuevas solicitudes. Podés seguir consultando y gestionando las que ya tenés en curso. Disculpá las molestias.",
     val maxPurchaseAmount: Int = 50000,
     val maxWeightKg: Int = 5,
     val rainEnabled: Boolean = false,
@@ -246,6 +246,11 @@ data class LocalOrder(
     val notes: String = ""
 )
 
+sealed interface OrderCreationResult {
+    data class Created(val order: LocalOrder) : OrderCreationResult
+    data class Blocked(val message: String) : OrderCreationResult
+}
+
 data class ShiftTemplate(
     val id: String,
     val dayOfWeek: Int,
@@ -364,7 +369,7 @@ fun defaultZones(): List<ZoneConfig> = listOf(
     ZoneConfig("quevedo", "Barrio Quevedo", "", "BARRIOS"),
     ZoneConfig("lebensohn_36_r46", "Acceso Lebensohn entre Calle 36 y Ruta 46", "", "ACCESOS Y RUTAS"),
     ZoneConfig("lebensohn_r46_r51", "Acceso Lebensohn entre Ruta 46 y Ruta 51", "", "ACCESOS Y RUTAS"),
-    ZoneConfig("illia_parque", "Acceso Illia hasta Parque industrial", "", "ACCESOS Y RUTAS"),
+    ZoneConfig("illia_parque", "Acceso Illia hasta Parque industrial", "", "BARRIOS"),
     ZoneConfig("illia_r46", "Acceso Illia hasta Ruta 46", "", "ACCESOS Y RUTAS"),
     ZoneConfig("ruta46_illia_lebensohn", "Ruta 46 entre Acceso Illia y Acceso Lebensohn", "", "ACCESOS Y RUTAS")
 )
