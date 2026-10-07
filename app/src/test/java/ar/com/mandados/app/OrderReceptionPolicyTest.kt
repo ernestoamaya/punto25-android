@@ -150,13 +150,22 @@ class OrderReceptionPolicyTest {
         val admin = source
             .substringAfter("private fun AdminScreen(")
             .substringBefore("private fun ZoneAdminDialog(")
+        val receptionControl = admin
+            .substringAfter("RECEPCIÓN DE NUEVAS SOLICITUDES")
+            .substringBefore("Field(\"Mensaje cuando la recepción está pausada\"")
         val home = source
             .substringAfter("private fun HomeScreen(")
             .substringBefore("private fun ServiceCard(")
 
         assertTrue(admin.contains("RECEPCIÓN DE NUEVAS SOLICITUDES"))
-        assertTrue(admin.contains("✓ HABILITADA"))
-        assertTrue(admin.contains("⛔ PAUSADA"))
+        assertTrue(receptionControl.contains("✓ HABILITADA"))
+        assertTrue(receptionControl.contains("⛔ PAUSADA"))
+        assertTrue(receptionControl.contains("receptionEnabledGreen"))
+        assertTrue(receptionControl.contains("receptionPausedRed"))
+        assertTrue(receptionControl.contains("SwitchDefaults.colors("))
+        assertTrue(receptionControl.contains("checkedTrackColor = receptionEnabledGreen"))
+        assertTrue(receptionControl.contains("uncheckedTrackColor = receptionPausedRed"))
+        assertTrue(!receptionControl.contains("MaterialTheme.colorScheme.primary"))
         assertTrue(review.contains("AssistBox(c.config.closedMessage)"))
         assertTrue(review.contains("enabled = legalAccepted && c.config.acceptingOrders"))
         assertTrue(home.contains("\"Compras\", \"Compramos en el comercio que necesites\", c.config.acceptingOrders"))
