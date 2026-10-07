@@ -157,7 +157,7 @@ class MapSelectionPolicyTest {
         assertTrue(workflow.contains("persist-credentials: false"))
         assertTrue(workflow.contains("TRUSTED_MAIN_SHA"))
         assertTrue(workflow.contains("SAFE_RELEASE_FLOOR_SHA"))
-        assertTrue(workflow.contains("git checkout --detach --force \"$TARGET_SHA\""))
+        assertTrue(workflow.contains("git checkout --detach --force \"\$TARGET_SHA\""))
         assertTrue(workflow.contains("SIGNER_COUNT"))
         assertTrue(workflow.contains("EXPECTED_ALPHA_CERT_SHA256"))
         assertTrue(workflow.contains("SHA256SUMS.txt"))
