@@ -23,7 +23,6 @@ import javax.crypto.spec.PBEKeySpec
 @Config(sdk = [35])
 class RiderEligibilityAndSessionIntegrationTest {
     private lateinit var context: Context
-    private val day = DateTimeFormatter.ofPattern("dd/MM/yyyy")
     private val stamp = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
     private val passwordA = "RiderA123"
     private val passwordB = "RiderB123"
@@ -35,14 +34,14 @@ class RiderEligibilityAndSessionIntegrationTest {
     }
 
     @Test
-    fun `REG-RIDER-ELIG-001 fixture persistido pre dev3_8 activo aprobado y docs aprobadas opera`() {
+    fun `REG-RIDER-ELIG-001 fixture Rider persistido pre dev3_8 apto opera sobre ConcreteShift v2`() {
         val rider = approvedRider("RID-LEGACY", "Rider Legacy")
         seed(riders = listOf(rider), credentials = listOf(testCredential(rider.id, passwordA)), shifts = listOf(allDayShift()))
         val c = MandadosController(context)
 
         assertTrue(c.authenticateRider(rider.id, passwordA))
         assertTrue(c.riderCanViewShiftsDecision(rider.id).allowed)
-        assertTrue(c.reserveShift(rider.id, allDayShift().id, today()))
+        assertTrue(c.reserveShift(rider.id, allDayShift().id))
         assertTrue(c.setRiderAvailable(rider.id, true))
         assertTrue(c.isRiderCurrentlyAvailable(rider.id))
     }
@@ -64,14 +63,13 @@ class RiderEligibilityAndSessionIntegrationTest {
             first.setRiderDocumentReview(riderId, key, DocumentReviewStatus.APPROVED)
         }
         first.setRiderApprovalStatus(riderId, RiderApprovalStatus.APPROVED)
-        val store = LocalStore(context)
-        store.saveRiderCredentials(listOf(testCredential(riderId, passwordA)))
-        store.saveShifts(listOf(allDayShift()))
+        LocalStore(context).saveRiderCredentials(listOf(testCredential(riderId, passwordA)))
+        assertTrue(ShiftStoreV2(context).saveConcreteShifts(listOf(allDayShift())))
 
         val c = MandadosController(context)
         assertTrue(c.authenticateRider(riderId, passwordA))
         assertTrue(c.riderCanViewShiftsDecision(riderId).allowed)
-        assertTrue(c.reserveShift(riderId, allDayShift().id, today()))
+        assertTrue(c.reserveShift(riderId, allDayShift().id))
         assertTrue(c.setRiderAvailable(riderId, true))
     }
 
@@ -84,7 +82,7 @@ class RiderEligibilityAndSessionIntegrationTest {
         assertTrue(c.authenticateRider(a.id, passwordA))
 
         assertEquals(RiderDenialReason.SESSION_REQUIRED, c.riderOperationalEligibility(b.id).reason)
-        assertEquals(RiderDenialReason.SESSION_REQUIRED, c.reserveShiftWithDecision(b.id, allDayShift().id, today()).reason)
+        assertEquals(RiderDenialReason.SESSION_REQUIRED, c.reserveShiftWithDecision(b.id, allDayShift().id).reason)
         assertEquals(RiderDenialReason.SESSION_REQUIRED, c.setRiderAvailableWithDecision(b.id, true).reason)
         assertFalse(c.updateRiderTransferAlias(b.id, "alias.b"))
     }
@@ -229,7 +227,7 @@ class RiderEligibilityAndSessionIntegrationTest {
         val c = controllerFor(rider)
         assertTrue(c.authenticateRider(rider.id, passwordA))
 
-        val shiftDecision = c.reserveShiftWithDecision(rider.id, allDayShift().id, today())
+        val shiftDecision = c.reserveShiftWithDecision(rider.id, allDayShift().id)
         val availabilityDecision = c.setRiderAvailableWithDecision(rider.id, true)
         val ordersDecision = c.riderCanAccessNewOrdersDecision(rider.id)
 
@@ -246,7 +244,7 @@ class RiderEligibilityAndSessionIntegrationTest {
         seed(listOf(rider), listOf(testCredential(rider.id, passwordA)), listOf(allDayShift()))
         val c = MandadosController(context)
 
-        assertTrue(c.adminAddRiderToShift(rider.id, allDayShift().id, today()))
+        assertTrue(c.adminAddRiderToShift(rider.id, allDayShift().id))
         assertFalse(c.hasAuthenticatedRiderSession(rider.id))
         assertFalse(riderWorkspaceSessionValid(c, rider.id))
         assertFalse(c.setRiderAvailable(rider.id, true))
@@ -294,7 +292,7 @@ class RiderEligibilityAndSessionIntegrationTest {
 
     private fun assertDeniedEverywhere(c: MandadosController, riderId: String, reason: RiderDenialReason) {
         assertEquals(reason, c.riderCanViewShiftsDecision(riderId).reason)
-        assertEquals(reason, c.reserveShiftWithDecision(riderId, allDayShift().id, today()).reason)
+        assertEquals(reason, c.reserveShiftWithDecision(riderId, allDayShift().id).reason)
         assertEquals(reason, c.setRiderAvailableWithDecision(riderId, true).reason)
         assertEquals(reason, c.riderCanAccessNewOrdersDecision(riderId).reason)
     }
@@ -312,14 +310,16 @@ class RiderEligibilityAndSessionIntegrationTest {
     private fun seed(
         riders: List<RiderProfile>,
         credentials: List<RiderCredential>,
-        shifts: List<ShiftTemplate>,
+        shifts: List<ConcreteShift>,
         orders: List<LocalOrder> = emptyList()
     ) {
         val store = LocalStore(context)
         store.saveRiders(riders)
         store.saveRiderCredentials(credentials)
-        store.saveShifts(shifts)
         store.saveOrders(orders)
+        val v2 = ShiftStoreV2(context)
+        assertTrue(v2.initializeIfNeeded().success)
+        assertTrue(v2.saveAll(emptyList(), shifts, emptyList(), emptyList()))
     }
 
     private fun approvedRider(id: String, name: String): RiderProfile = RiderProfile(
@@ -347,16 +347,14 @@ class RiderEligibilityAndSessionIntegrationTest {
         insuranceCardUri = "content://docs/insurance"
     )
 
-    private fun allDayShift(): ShiftTemplate = ShiftTemplate(
-        id = "SHIFT-ALL-DAY",
-        dayOfWeek = LocalDate.now().dayOfWeek.value,
-        startTime = "00:00",
-        endTime = "24:00",
+    private fun allDayShift(): ConcreteShift = ConcreteShift(
+        id = "CS-ALL-DAY",
+        serviceDate = ShiftSchedulePolicy.toIsoDate(LocalDate.now()),
+        startMinute = 0,
+        endMinute = 24 * 60,
         capacity = 4,
         enabled = true
     )
-
-    private fun today(): String = LocalDate.now().format(day)
 
     private fun order(id: String, riderId: String?, status: OrderStatus): LocalOrder = LocalOrder(
         id = id,

@@ -33,7 +33,35 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-AUTH-001 | Sin sesión Rider autenticada, las acciones self-service sensibles fallan cerrado. | `RiderSessionAndTipIntegrationTest.REG-RIDER-AUTH-001…` |
 | REG-RIDER-AUTH-002 | Una sesión Rider A no puede operar recursos self-service de Rider B. | `RiderSessionAndTipIntegrationTest.REG-RIDER-AUTH-002…` |
 | REG-RIDER-AUTH-003 | La lectura de pedidos activos queda protegida por sesión: Rider A ve sólo los propios y nunca los de Rider B. | `RiderEligibilityBoundaryRegressionTest.REG-RIDER-AUTH-003…` |
+| REG-SHIFT-RULE-001 | Las reglas aceptan sólo días/horarios/cupo válidos, incluido inicio `00:00` y fin `24:00`. | `ShiftSchedulePolicyTest.REG-SHIFT-RULE-001…` |
+| REG-SHIFT-RULE-002 | Las reglas detectan solapamientos por ventanas reales, incluido domingo → lunes. | `ShiftSchedulePolicyTest.REG-SHIFT-RULE-002…` |
+| REG-SHIFT-DATE-STRICT-001 | Las fechas internas usan ISO estricto y las fechas imposibles/ambiguas se rechazan. | `ShiftSchedulePolicyTest.REG-SHIFT-DATE-STRICT-001…` |
+| REG-SHIFT-CONCRETE-001 | Un `ConcreteShift` mantiene `serviceDate` canónica e inmutable durante la edición. | `ShiftConcreteIntegrationTest.REG-SHIFT-CONCRETE-001…` |
+| REG-SHIFT-GEN-RANGE-001 | La generación manual es inclusiva, soporta un día, múltiples semanas, días sin reglas y límites inicial/final parciales. | `ShiftSchedulePolicyTest.REG-SHIFT-GEN-RANGE-001…` |
+| REG-SHIFT-GEN-IDEMPOTENT-001 | La identidad de un turno generado es `(originRuleId, serviceDate)` y una confirmación repetida no duplica lineage. | `ShiftSchedulePolicyTest.REG-SHIFT-GEN-IDEMPOTENT-001…`, `ShiftConcreteIntegrationTest.REG-SHIFT-GEN-IDEMPOTENT-001…` |
+| REG-SHIFT-GEN-IDEMPOTENT-002 | Una ocurrencia generada luego editada/deshabilitada como excepción conserva identidad y no se recrea ni sobrescribe. | `ShiftSchedulePolicyTest.REG-SHIFT-GEN-IDEMPOTENT-002…`, `ShiftConcreteIntegrationTest.REG-SHIFT-GEN-IDEMPOTENT-002…` |
+| REG-SHIFT-GEN-CONFLICT-001 | Un turno ajeno solapado invalida la generación completa. | `ShiftSchedulePolicyTest.REG-SHIFT-GEN-CONFLICT-001…` |
+| REG-SHIFT-GEN-CONFLICT-002 | Un turno ajeno deshabilitado también bloquea una generación solapada. | `ShiftSchedulePolicyTest.REG-SHIFT-GEN-CONFLICT-002…` |
+| REG-SHIFT-GEN-ATOMIC-001 | Error de validación/conflicto deja memoria y persistencia sin aplicación parcial. | `ShiftSchedulePolicyTest.REG-SHIFT-GEN-ATOMIC-001…`, `ShiftConcreteIntegrationTest.REG-SHIFT-GEN-ATOMIC-001…` |
+| REG-SHIFT-GEN-PERSIST-001 | Reglas, turnos concretos, reservas y excepciones sobreviven recarga coherentemente. | `ShiftConcreteIntegrationTest.REG-SHIFT-GEN-PERSIST-001…` |
+| REG-SHIFT-TEMPLATE-FUTURE-001 | Editar una regla afecta sólo generaciones futuras y no reescribe ocurrencias materializadas. | `ShiftConcreteIntegrationTest.REG-SHIFT-TEMPLATE-FUTURE-001…` |
+| REG-SHIFT-TEMPLATE-DELETE-001 | Eliminar una regla preserva ocurrencias concretas existentes, reservas y lineage. | `ShiftConcreteIntegrationTest.REG-SHIFT-TEMPLATE-DELETE-001…` |
+| REG-SHIFT-OVERNIGHT-001 | Turnos que cruzan medianoche usan intervalos reales `[inicio, fin)` y permanecen activos sólo dentro de la ventana correcta. | `ShiftSchedulePolicyTest.REG-SHIFT-OVERNIGHT-001…`, `ShiftConcreteIntegrationTest.REG-SHIFT-OVERNIGHT-001…` |
+| REG-SHIFT-EDIT-RESERVED-001 | Con reservas activas, cambiar el horario del turno concreto está bloqueado. | `ShiftConcreteIntegrationTest.REG-SHIFT-EDIT-RESERVED-001…` |
+| REG-SHIFT-EDIT-RESERVED-002 | Con reservas activas, capacidad puede aumentar o bajar hasta `reservedCount`, nunca por debajo. | `ShiftConcreteIntegrationTest.REG-SHIFT-EDIT-RESERVED-002…`, `ShiftReservationV2IntegrationTest.REG-SHIFT-EDIT-RESERVED-002…` |
+| REG-SHIFT-DISABLE-001 | Un turno concreto con reservas activas no puede deshabilitarse. | `ShiftConcreteIntegrationTest.REG-SHIFT-DISABLE-001…` |
+| REG-SHIFT-RESERVATION-DATE-001 | La reserva recibe `concreteShiftId`; la fecha se deriva exclusivamente del `ConcreteShift`. | `ShiftConcreteIntegrationTest.REG-SHIFT-RESERVATION-DATE-001…` |
 | REG-SHIFT-AUTH-001 | Rider A no puede reservar ni cancelar turnos actuando como Rider B. | `RiderSessionAndTipIntegrationTest.REG-SHIFT-AUTH-001…` |
+| REG-SHIFT-ALPHA-RESET-001 | El reset lógico v2 elimina sólo legado de Turnos, reconcilia disponibilidad y conserva Cliente/config/pedidos/pagos y otros datos ajenos. | `ShiftConcreteIntegrationTest.REG-SHIFT-ALPHA-RESET-001…`, `ShiftAlphaResetScopeTest.REG-SHIFT-ALPHA-RESET-001…` |
+| REG-SHIFT-DIALOG-001 | Editores/calendarios nuevos respetan TODO-2: toque exterior no cierra y Back/CANCEL protegen cambios dirty. | `ShiftV2UiPolicyTest.REG-SHIFT-DIALOG-001…` |
+| REG-SHIFT-GEN-PREVIEW-001 | Previsualizar generación no persiste ni altera memoria. | `ShiftGenerationConcurrencyTest.REG-SHIFT-GEN-PREVIEW-001…` |
+| REG-SHIFT-GEN-CONCURRENCY-001 | Dos controladores no pueden confirmar generación usando un snapshot obsoleto. | `ShiftGenerationConcurrencyTest.REG-SHIFT-GEN-CONCURRENCY-001…` |
+| REG-SHIFT-STORE-CAS-001 | Una escritura v2 con revisión obsoleta falla sin pisar el snapshot vigente. | `ShiftGenerationConcurrencyTest.REG-SHIFT-STORE-CAS-001…` |
+| REG-SHIFT-CANCEL-001 | Una cancelación reciente impone el cooldown existente de 15 minutos. | `ShiftReservationV2IntegrationTest.REG-SHIFT-CANCEL-001…` |
+| REG-SHIFT-CANCEL-002 | La segunda cancelación de la misma ocurrencia bloquea una nueva reinscripción. | `ShiftReservationV2IntegrationTest.REG-SHIFT-CANCEL-002…` |
+| REG-SHIFT-CANCEL-003 | Cancelar el único turno activo desactiva disponibilidad y persiste auditoría. | `ShiftReservationV2IntegrationTest.REG-SHIFT-CANCEL-003…` |
+| REG-SHIFT-UI-001 | Administración distingue reglas, generación y turnos concretos sin exponer lineage técnico. | `ShiftV2UiPolicyTest.REG-SHIFT-UI-001…` |
+| REG-SHIFT-WIRING-001 | Los entry points operativos de Admin y Repartidor delegan exclusivamente en las pantallas v2; las implementaciones v1 quedan no navegables. | `ShiftV2UiPolicyTest.REG-SHIFT-WIRING-001…` |
 | REG-ORDER-AUTH-001 | Rider A no puede tomar ni modificar pedidos actuando como Rider B; las acciones administrativas explícitas quedan atribuidas a `ADMIN`. | `RiderSessionAndTipIntegrationTest.REG-ORDER-AUTH-001…` |
 | REG-ORDER-RECEPTION-001 | Con recepción pausada, el dominio rechaza una nueva solicitud sin alterar pedidos, pagos, eventos de pedidos preexistentes ni el draft, incluso tras recarga. | `OrderReceptionPolicyTest.REG-ORDER-RECEPTION-001…` |
 | REG-ORDER-RECEPTION-002 | Un flujo iniciado mientras estaba habilitado falla cerrado si Administración pausa antes del envío final. | `OrderReceptionPolicyTest.REG-ORDER-RECEPTION-002…` |
