@@ -13,6 +13,7 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.UUID
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 import android.util.Base64
@@ -21,6 +22,9 @@ import kotlin.random.Random
 class MandadosController(context: Context) {
     private val appContext = context.applicationContext
     private val store = LocalStore(appContext)
+    private val shiftStoreV2 = ShiftStoreV2(appContext)
+    private val shiftMutationLock = Any()
+    private var shiftV2Ready = false
     private val timestampFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
     private val legacyTimestampFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
     private val serviceDateFormat = DateTimeFormatter.ofPattern("dd/MM/yyyy")
@@ -34,11 +38,20 @@ class MandadosController(context: Context) {
         private set
     var riders by mutableStateOf(store.loadRiders())
         private set
-    var shifts by mutableStateOf(store.loadShifts())
+    // Legacy ShiftTemplate state is deliberately never loaded after the v2 cutover.
+    var shifts by mutableStateOf(emptyList<ShiftTemplate>())
         private set
-    var shiftReservations by mutableStateOf(store.loadShiftReservations())
+    var shiftReservations by mutableStateOf(emptyList<RiderShiftReservation>())
         private set
-    var shiftAuditEvents by mutableStateOf(store.loadShiftAuditEvents())
+    var shiftAuditEvents by mutableStateOf(emptyList<ShiftAuditEvent>())
+        private set
+    var shiftRules by mutableStateOf(emptyList<ShiftGenerationRule>())
+        private set
+    var concreteShifts by mutableStateOf(emptyList<ConcreteShift>())
+        private set
+    var concreteShiftReservations by mutableStateOf(emptyList<ConcreteShiftReservation>())
+        private set
+    var concreteShiftAuditEvents by mutableStateOf(emptyList<ConcreteShiftAuditEvent>())
         private set
     var riderInvitations by mutableStateOf(store.loadRiderInvitations())
         private set
@@ -59,6 +72,20 @@ class MandadosController(context: Context) {
         private set
 
     init {
+        val initialization = shiftStoreV2.initializeIfNeeded()
+        if (initialization.initializedNow) riders = store.loadRiders()
+        val snapshot = if (initialization.success) {
+            shiftStoreV2.loadSnapshot()
+        } else {
+            ShiftStoreSnapshot(emptyList(), emptyList(), emptyList(), emptyList(), false)
+        }
+        shiftV2Ready = initialization.success && isShiftSnapshotConsistent(snapshot)
+        if (shiftV2Ready) {
+            shiftRules = snapshot.rules
+            concreteShifts = snapshot.shifts
+            concreteShiftReservations = snapshot.reservations
+            concreteShiftAuditEvents = snapshot.audit
+        }
         reconcileCurrentCustomerOrderIdentity()
     }
 
@@ -1203,306 +1230,212 @@ class MandadosController(context: Context) {
         store.saveLegalAcceptances(legalAcceptances)
     }
 
-    fun saveShiftTemplate(shift: ShiftTemplate) {
-        shifts = shifts.filterNot { it.id == shift.id } + shift
-        store.saveShifts(shifts)
-    }
-
-    fun isShiftActiveNow(shift: ShiftTemplate, now: LocalDateTime = LocalDateTime.now()): Boolean {
-        val candidates = listOf(now.toLocalDate(), now.toLocalDate().minusDays(1))
-        return candidates.any { date ->
-            val dateText = date.format(serviceDateFormat)
-            val applies = if (shift.isSpecificDate) {
-                shift.specificDate == dateText
-            } else {
-                shift.dayOfWeek == date.dayOfWeek.value
+    private fun isShiftSnapshotConsistent(snapshot: ShiftStoreSnapshot): Boolean {
+        if (!snapshot.healthy) return false
+        if (snapshot.rules.map { it.id }.toSet().size != snapshot.rules.size) return false
+        if (snapshot.shifts.map { it.id }.toSet().size != snapshot.shifts.size) return false
+        if (snapshot.reservations.map { it.id }.toSet().size != snapshot.reservations.size) return false
+        if (snapshot.rules.any { ShiftSchedulePolicy.validateRule(it) != null }) return false
+        for (i in snapshot.rules.indices) {
+            for (j in i + 1 until snapshot.rules.size) {
+                if (ShiftSchedulePolicy.rulesOverlap(snapshot.rules[i], snapshot.rules[j])) return false
             }
-            if (!applies) return@any false
-            val window = shiftWindow(shift, dateText) ?: return@any false
-            !now.isBefore(window.first) && now.isBefore(window.second)
         }
-    }
-
-    fun canDeleteShiftTemplate(id: String): Boolean {
-        val shift = shifts.firstOrNull { it.id == id } ?: return false
-        if (isShiftActiveNow(shift)) return false
-        val now = LocalDateTime.now()
-        val hasCurrentOrFutureReservations = shiftReservations.any { reservation ->
-            if (reservation.shiftTemplateId != id || reservation.status != ShiftReservationStatus.RESERVED) return@any false
-            val window = shiftWindow(shift, reservation.serviceDate) ?: return@any false
-            window.second.isAfter(now)
+        if (snapshot.shifts.any { ShiftSchedulePolicy.validateConcrete(it) != null }) return false
+        if (snapshot.shifts.filter { it.originRuleId != null }
+                .groupBy { it.originRuleId!! to it.serviceDate }.any { it.value.size > 1 }) return false
+        for (i in snapshot.shifts.indices) {
+            for (j in i + 1 until snapshot.shifts.size) {
+                if (ShiftSchedulePolicy.overlaps(snapshot.shifts[i], snapshot.shifts[j])) return false
+            }
         }
-        return !hasCurrentOrFutureReservations
-    }
-
-    fun deleteShiftTemplate(id: String): Boolean {
-        if (!canDeleteShiftTemplate(id)) return false
-        if (shifts.none { it.id == id }) return false
-        shifts = shifts.filterNot { it.id == id }
-        store.saveShifts(shifts)
+        val shiftsById = snapshot.shifts.associateBy { it.id }
+        if (snapshot.reservations.any { reservation ->
+                shiftsById[reservation.concreteShiftId] == null || riders.none { it.id == reservation.riderId }
+            }) return false
+        snapshot.shifts.forEach { shift ->
+            val reserved = snapshot.reservations.filter {
+                it.concreteShiftId == shift.id && it.status == ShiftReservationStatus.RESERVED
+            }
+            if (reserved.size > shift.capacity) return false
+            if (!shift.enabled && reserved.isNotEmpty()) return false
+        }
+        snapshot.reservations.filter { it.status == ShiftReservationStatus.RESERVED }
+            .groupBy { it.riderId }.values.forEach { reservations ->
+                for (i in reservations.indices) {
+                    for (j in i + 1 until reservations.size) {
+                        val a = shiftsById[reservations[i].concreteShiftId] ?: return false
+                        val b = shiftsById[reservations[j].concreteShiftId] ?: return false
+                        if (ShiftSchedulePolicy.overlaps(a, b)) return false
+                    }
+                }
+            }
+        if (snapshot.audit.any { event ->
+                shiftsById[event.concreteShiftId] == null || snapshot.reservations.none { it.id == event.reservationId }
+            }) return false
         return true
     }
 
-    fun addShiftTemplatesBulk(days: Set<Int>, ranges: List<Pair<String, String>>, capacity: Int): String? {
-        if (days.isEmpty()) return "Seleccioná al menos un día."
-        if (ranges.isEmpty()) return "Agregá al menos un horario."
-        if (capacity < 1) return "El cupo debe ser mayor a cero."
+    fun isShiftSubsystemReady(): Boolean = shiftV2Ready
 
-        val candidates = mutableListOf<ShiftTemplate>()
-        days.sorted().forEach { day ->
-            ranges.forEach { (rawStart, rawEnd) ->
-                val startTime = normalizeClock(rawStart, allow24 = false) ?: return "Horario de inicio inválido: " + rawStart
-                val endTime = normalizeClock(rawEnd, allow24 = true) ?: return "Horario de fin inválido: " + rawEnd
-                if (startTime == endTime) return "El inicio y el fin no pueden ser iguales (" + startTime + ")."
-                candidates += ShiftTemplate(
-                    id = "SHIFT-" + System.currentTimeMillis() + "-" + day + "-" + candidates.size,
-                    dayOfWeek = day,
-                    startTime = startTime,
-                    endTime = endTime,
-                    capacity = capacity,
-                    specificDate = null
+    fun shiftRule(id: String?): ShiftGenerationRule? = shiftRules.firstOrNull { it.id == id }
+
+    fun concreteShift(id: String?): ConcreteShift? = concreteShifts.firstOrNull { it.id == id }
+
+    fun concreteShifts(from: LocalDate, to: LocalDate): List<ConcreteShift> {
+        if (!shiftV2Ready || to.isBefore(from)) return emptyList()
+        return concreteShifts.filter { shift ->
+            val date = ShiftSchedulePolicy.parseIsoDate(shift.serviceDate) ?: return@filter false
+            !date.isBefore(from) && !date.isAfter(to)
+        }.sortedBy { ShiftSchedulePolicy.window(it)?.first ?: LocalDateTime.MAX }
+    }
+
+    fun shiftWindow(shift: ConcreteShift): Pair<LocalDateTime, LocalDateTime>? =
+        ShiftSchedulePolicy.window(shift)
+
+    fun addShiftRule(days: Set<Int>, rawStart: String, rawEnd: String, capacity: Int): String? =
+        synchronized(shiftMutationLock) {
+            if (!shiftV2Ready) return@synchronized "El almacenamiento de Turnos no está disponible."
+            val start = ShiftSchedulePolicy.parseClock(rawStart, allow24 = false)
+                ?: return@synchronized "Horario de inicio inválido."
+            val end = ShiftSchedulePolicy.parseClock(rawEnd, allow24 = true)
+                ?: return@synchronized "Horario de fin inválido."
+            val candidate = ShiftGenerationRule(
+                id = "SGR-${UUID.randomUUID()}",
+                daysOfWeek = days.toSet(),
+                startMinute = start,
+                endMinute = end,
+                capacity = capacity
+            )
+            ShiftSchedulePolicy.validateRule(candidate)?.let { return@synchronized it }
+            if (ShiftSchedulePolicy.firstRuleConflict(shiftRules, candidate) != null) {
+                return@synchronized "La regla se superpone con otro horario configurado, incluso considerando cruces de medianoche."
+            }
+            val final = shiftRules + candidate
+            if (!shiftStoreV2.saveRules(final)) return@synchronized "No se pudo guardar la configuración de turnos."
+            shiftRules = final
+            null
+        }
+
+    fun updateShiftRule(id: String, days: Set<Int>, rawStart: String, rawEnd: String, capacity: Int): String? =
+        synchronized(shiftMutationLock) {
+            if (!shiftV2Ready) return@synchronized "El almacenamiento de Turnos no está disponible."
+            val current = shiftRules.firstOrNull { it.id == id } ?: return@synchronized "Regla no encontrada."
+            val start = ShiftSchedulePolicy.parseClock(rawStart, allow24 = false)
+                ?: return@synchronized "Horario de inicio inválido."
+            val end = ShiftSchedulePolicy.parseClock(rawEnd, allow24 = true)
+                ?: return@synchronized "Horario de fin inválido."
+            val candidate = current.copy(daysOfWeek = days.toSet(), startMinute = start, endMinute = end, capacity = capacity)
+            ShiftSchedulePolicy.validateRule(candidate)?.let { return@synchronized it }
+            if (ShiftSchedulePolicy.firstRuleConflict(shiftRules, candidate) != null) {
+                return@synchronized "La regla se superpone con otro horario configurado, incluso considerando cruces de medianoche."
+            }
+            if (candidate == current) return@synchronized null
+            val final = shiftRules.map { if (it.id == id) candidate else it }
+            if (!shiftStoreV2.saveRules(final)) return@synchronized "No se pudo guardar la configuración de turnos."
+            shiftRules = final
+            null
+        }
+
+    fun deleteShiftRule(id: String): Boolean = synchronized(shiftMutationLock) {
+        if (!shiftV2Ready || shiftRules.none { it.id == id }) return@synchronized false
+        val final = shiftRules.filterNot { it.id == id }
+        if (!shiftStoreV2.saveRules(final)) return@synchronized false
+        shiftRules = final
+        true
+    }
+
+    fun previewShiftGeneration(request: ShiftGenerationRequest): ShiftGenerationPreview =
+        synchronized(shiftMutationLock) {
+            if (!shiftV2Ready) {
+                ShiftGenerationPreview(request, 0, emptyList(), 0, 0, error = "El almacenamiento de Turnos no está disponible.")
+            } else {
+                ShiftSchedulePolicy.buildGenerationPreview(request, shiftRules, concreteShifts)
+            }
+        }
+
+    fun confirmShiftGeneration(request: ShiftGenerationRequest): ShiftGenerationPreview =
+        synchronized(shiftMutationLock) {
+            if (!shiftV2Ready) {
+                return@synchronized ShiftGenerationPreview(
+                    request, 0, emptyList(), 0, 0,
+                    error = "El almacenamiento de Turnos no está disponible."
                 )
             }
+            // Rebuild from the current snapshot: preview state is never trusted for persistence.
+            val current = ShiftSchedulePolicy.buildGenerationPreview(request, shiftRules, concreteShifts)
+            if (!current.canConfirm || current.newShifts.isEmpty()) return@synchronized current
+            val final = concreteShifts + current.newShifts
+            if (!shiftStoreV2.saveConcreteShifts(final)) {
+                return@synchronized current.copy(
+                    newShifts = emptyList(),
+                    error = "No se pudo persistir la generación. No se aplicó ningún turno."
+                )
+            }
+            concreteShifts = final
+            current
         }
 
-        val existing = shifts.filter { it.enabled && !it.isSpecificDate }
-        for (i in candidates.indices) {
-            for (j in i + 1 until candidates.size) {
-                if (shiftTemplatesOverlap(candidates[i], candidates[j])) {
-                    val a = candidates[i]
-                    val b = candidates[j]
-                    return "Horario duplicado o superpuesto dentro del lote: " + dayName(a.dayOfWeek) + " " + a.startTime + "–" + a.endTime +
-                        " con " + dayName(b.dayOfWeek) + " " + b.startTime + "–" + b.endTime + "."
-                }
-            }
-            val conflict = existing.firstOrNull { shiftTemplatesOverlap(it, candidates[i]) }
-            if (conflict != null) {
-                val candidate = candidates[i]
-                return "Horario duplicado o superpuesto: " + dayName(candidate.dayOfWeek) + " " + candidate.startTime + "–" + candidate.endTime +
-                    " entra en conflicto con " + dayName(conflict.dayOfWeek) + " " + conflict.startTime + "–" + conflict.endTime + "."
-            }
-        }
-        shifts = shifts + candidates
-        store.saveShifts(shifts)
-        return null
-    }
-
-    fun addSpecificDateShifts(dateText: String, ranges: List<Pair<String, String>>, capacity: Int): String? {
-        val date = runCatching { LocalDate.parse(dateText, serviceDateFormat) }.getOrNull()
-            ?: return "Fecha inválida. Usá DD/MM/AAAA."
-        if (ranges.isEmpty()) return "Agregá al menos un horario."
-        if (capacity < 1) return "El cupo debe ser mayor a cero."
-        val candidates = mutableListOf<ShiftTemplate>()
-        ranges.forEach { (rawStart, rawEnd) ->
-            val startTime = normalizeClock(rawStart, allow24 = false) ?: return "Horario de inicio inválido: " + rawStart
-            val endTime = normalizeClock(rawEnd, allow24 = true) ?: return "Horario de fin inválido: " + rawEnd
-            if (startTime == endTime) return "El inicio y el fin no pueden ser iguales (" + startTime + ")."
-            candidates += ShiftTemplate(
-                id = "SHIFT-DATE-" + System.currentTimeMillis() + "-" + candidates.size,
-                dayOfWeek = date.dayOfWeek.value,
-                startTime = startTime,
-                endTime = endTime,
-                capacity = capacity,
-                specificDate = dateText
-            )
-        }
-        for (i in candidates.indices) {
-            for (j in i + 1 until candidates.size) {
-                if (shiftOccurrenceOverlap(candidates[i], dateText, candidates[j], dateText)) {
-                    return "Hay horarios superpuestos dentro del lote para " + dateText + "."
-                }
-            }
-            val conflict = shifts.firstOrNull {
-                it.enabled && it.isSpecificDate && it.id != candidates[i].id &&
-                    shiftOccurrenceOverlap(it, it.specificDate ?: dateText, candidates[i], dateText)
-            }
-            if (conflict != null) {
-                return "Ese horario se superpone con otro turno específico del " + (conflict.specificDate ?: dateText) + "."
-            }
-        }
-        // Si ya existían reservas sobre el patrón semanal para esta fecha especial,
-        // las migramos al turno específico equivalente para no duplicar la ocurrencia.
-        val migrationTargets = mutableMapOf<String, String>()
-        shifts.filter { it.enabled && !it.isSpecificDate }.forEach { recurring ->
-            val target = candidates.firstOrNull { shiftOccurrenceOverlap(recurring, dateText, it, dateText) }
-            if (target != null) migrationTargets[recurring.id] = target.id
-        }
-        candidates.forEach { candidate ->
-            val incoming = shiftReservations.count { reservation ->
-                reservation.serviceDate == dateText &&
-                    reservation.status == ShiftReservationStatus.RESERVED &&
-                    migrationTargets[reservation.shiftTemplateId] == candidate.id
-            }
-            if (incoming > candidate.capacity) {
-                return "El cupo del turno especial debe ser al menos " + incoming + " porque ya hay inscripciones en el horario semanal reemplazado."
-            }
-        }
-
-        shifts = shifts + candidates
-        if (migrationTargets.isNotEmpty()) {
-            shiftReservations = shiftReservations.map { reservation ->
-                if (reservation.serviceDate == dateText && migrationTargets.containsKey(reservation.shiftTemplateId)) {
-                    reservation.copy(shiftTemplateId = migrationTargets.getValue(reservation.shiftTemplateId))
-                } else reservation
-            }
-            store.saveShiftReservations(shiftReservations)
-        }
-        store.saveShifts(shifts)
-        return null
-    }
-
-    fun updateShiftTemplate(
+    fun updateConcreteShift(
         id: String,
-        recurring: Boolean,
-        dayOfWeek: Int,
-        specificDate: String?,
         rawStart: String,
         rawEnd: String,
         capacity: Int,
         enabled: Boolean
-    ): String? {
-        val current = shifts.firstOrNull { it.id == id } ?: return "Turno no encontrado."
-        if (capacity < 1) return "El cupo debe ser mayor a cero."
-        val startTime = normalizeClock(rawStart, allow24 = false) ?: return "Horario de inicio inválido."
-        val endTime = normalizeClock(rawEnd, allow24 = true) ?: return "Horario de fin inválido."
-        if (startTime == endTime) return "El inicio y el fin no pueden ser iguales."
+    ): String? = synchronized(shiftMutationLock) {
+        if (!shiftV2Ready) return@synchronized "El almacenamiento de Turnos no está disponible."
+        val current = concreteShifts.firstOrNull { it.id == id } ?: return@synchronized "Turno no encontrado."
+        val start = ShiftSchedulePolicy.parseClock(rawStart, allow24 = false)
+            ?: return@synchronized "Horario de inicio inválido."
+        val end = ShiftSchedulePolicy.parseClock(rawEnd, allow24 = true)
+            ?: return@synchronized "Horario de fin inválido."
+        ShiftSchedulePolicy.validateWindow(start, end)?.let { return@synchronized it }
+        if (capacity < 1) return@synchronized "El cupo debe ser mayor a cero."
 
-        val date = if (recurring) null else runCatching {
-            LocalDate.parse(specificDate.orEmpty(), serviceDateFormat)
-        }.getOrNull() ?: if (!recurring) return "Fecha inválida. Usá DD/MM/AAAA." else null
+        val reservedCount = concreteShiftReservations.count {
+            it.concreteShiftId == id && it.status == ShiftReservationStatus.RESERVED
+        }
+        val hoursChanged = start != current.startMinute || end != current.endMinute
+        if (reservedCount > 0 && hoursChanged) {
+            return@synchronized "No se puede cambiar el horario mientras haya reservas activas."
+        }
+        if (capacity < reservedCount) {
+            return@synchronized "El cupo no puede quedar por debajo de $reservedCount porque ya hay reservas activas."
+        }
+        if (reservedCount > 0 && current.enabled && !enabled) {
+            return@synchronized "No se puede deshabilitar un turno mientras haya reservas activas."
+        }
+        if (start == current.startMinute && end == current.endMinute &&
+            capacity == current.capacity && enabled == current.enabled) return@synchronized null
 
         val candidate = current.copy(
-            dayOfWeek = if (recurring) dayOfWeek.coerceIn(1, 7) else date!!.dayOfWeek.value,
-            startTime = startTime,
-            endTime = endTime,
+            startMinute = start,
+            endMinute = end,
             capacity = capacity,
             enabled = enabled,
-            specificDate = if (recurring) null else specificDate
+            isException = current.isException || current.originRuleId != null
         )
-
-        val maxReserved = shiftReservations
-            .filter { it.shiftTemplateId == id && it.status == ShiftReservationStatus.RESERVED }
-            .groupingBy { it.serviceDate }.eachCount().values.maxOrNull() ?: 0
-        if (capacity < maxReserved) return "El cupo no puede quedar por debajo de " + maxReserved + " porque ya hay inscripciones."
-
-        val conflict = if (candidate.isSpecificDate) {
-            shifts.firstOrNull {
-                it.id != id && it.enabled && it.isSpecificDate &&
-                    shiftOccurrenceOverlap(it, it.specificDate!!, candidate, candidate.specificDate!!)
-            }
-        } else {
-            shifts.firstOrNull { it.id != id && it.enabled && !it.isSpecificDate && shiftTemplatesOverlap(it, candidate) }
+        if (concreteShifts.any { it.id != id && ShiftSchedulePolicy.overlaps(it, candidate) }) {
+            return@synchronized "El turno editado se superpone con otro turno concreto."
         }
-        if (conflict != null) return "El turno editado se superpone con otro horario configurado."
-
-        shifts = shifts.map { if (it.id == id) candidate else it }
-        store.saveShifts(shifts)
-        if (!enabled) {
-            riders.filter { riderHasActiveShiftNow(it.id) }.forEach { /* conserva presencia si tiene otro turno */ }
-        }
-        return null
+        val final = concreteShifts.map { if (it.id == id) candidate else it }
+        if (!shiftStoreV2.saveConcreteShifts(final)) return@synchronized "No se pudo guardar el turno."
+        concreteShifts = final
+        if (!enabled) disableAvailabilityIfNoActiveShiftForAll()
+        null
     }
 
-    fun normalizeClock(raw: String, allow24: Boolean): String? {
-        val digits = raw.filter(Char::isDigit)
-        if (digits.length != 4) return null
-        val hour = digits.substring(0, 2).toIntOrNull() ?: return null
-        val minute = digits.substring(2, 4).toIntOrNull() ?: return null
-        if (minute !in 0..59) return null
-        if (hour == 24) return if (allow24 && minute == 0) "24:00" else null
-        if (hour !in 0..23) return null
-        return "%02d:%02d".format(hour, minute)
-    }
-
-    private fun minuteOfDay(text: String): Int? {
-        if (text == "24:00") return 1440
-        val parts = text.split(":")
-        if (parts.size != 2) return null
-        val h = parts[0].toIntOrNull() ?: return null
-        val m = parts[1].toIntOrNull() ?: return null
-        if (h !in 0..23 || m !in 0..59) return null
-        return h * 60 + m
-    }
-
-    private fun weeklyInterval(shift: ShiftTemplate): Pair<Int, Int>? {
-        val startMinute = minuteOfDay(shift.startTime) ?: return null
-        val endMinuteRaw = minuteOfDay(shift.endTime) ?: return null
-        val base = (shift.dayOfWeek - 1).coerceIn(0, 6) * 1440
-        val startMinuteOfWeek = base + startMinute
-        val endMinuteOfWeek = when {
-            endMinuteRaw == 1440 -> base + 1440
-            endMinuteRaw <= startMinute -> base + 1440 + endMinuteRaw
-            else -> base + endMinuteRaw
-        }
-        return startMinuteOfWeek to endMinuteOfWeek
-    }
-
-    private fun shiftTemplatesOverlap(a: ShiftTemplate, b: ShiftTemplate): Boolean {
-        val ai = weeklyInterval(a) ?: return true
-        val bi = weeklyInterval(b) ?: return true
-        val week = 7 * 1440
-        fun overlaps(x: Pair<Int, Int>, y: Pair<Int, Int>): Boolean = x.first < y.second && y.first < x.second
-        return overlaps(ai, bi) ||
-            overlaps(ai, (bi.first + week) to (bi.second + week)) ||
-            overlaps((ai.first + week) to (ai.second + week), bi)
-    }
-
-    fun shiftWindow(shift: ShiftTemplate, serviceDate: String): Pair<LocalDateTime, LocalDateTime>? {
-        val date = runCatching { LocalDate.parse(serviceDate, serviceDateFormat) }.getOrNull() ?: return null
-        val startMinutes = minuteOfDay(shift.startTime) ?: return null
-        val endMinutes = minuteOfDay(shift.endTime) ?: return null
-        if (startMinutes >= 1440) return null
-        val startAt = date.atStartOfDay().plusMinutes(startMinutes.toLong())
-        val endAt = when {
-            endMinutes == 1440 -> date.plusDays(1).atStartOfDay()
-            endMinutes <= startMinutes -> date.plusDays(1).atStartOfDay().plusMinutes(endMinutes.toLong())
-            else -> date.atStartOfDay().plusMinutes(endMinutes.toLong())
-        }
-        return startAt to endAt
-    }
-
-    private fun shiftOccurrenceOverlap(a: ShiftTemplate, dateA: String, b: ShiftTemplate, dateB: String): Boolean {
-        val aw = shiftWindow(a, dateA) ?: return true
-        val bw = shiftWindow(b, dateB) ?: return true
-        return aw.first.isBefore(bw.second) && bw.first.isBefore(aw.second)
-    }
-
-    fun shiftOccurrences(from: LocalDate, to: LocalDate): List<Pair<ShiftTemplate, String>> {
-        if (to.isBefore(from)) return emptyList()
-        val result = mutableListOf<Pair<ShiftTemplate, String>>()
-        var date = from
-        while (!date.isAfter(to)) {
-            val dateText = date.format(serviceDateFormat)
-            val specifics = shifts.filter { it.enabled && it.specificDate == dateText }
-            val recurring = shifts.filter {
-                it.enabled && !it.isSpecificDate && it.dayOfWeek == date.dayOfWeek.value
-            }.filter { regular ->
-                specifics.none { special -> shiftOccurrenceOverlap(regular, dateText, special, dateText) }
-            }
-            (specifics + recurring).forEach { result += it to dateText }
-            date = date.plusDays(1)
-        }
-
-        shiftReservations.filter { it.status == ShiftReservationStatus.RESERVED }.forEach { reservation ->
-            val serviceDate = runCatching { LocalDate.parse(reservation.serviceDate, serviceDateFormat) }.getOrNull()
-                ?: return@forEach
-            if (serviceDate.isBefore(from) || serviceDate.isAfter(to)) return@forEach
-            val shift = shifts.firstOrNull { it.id == reservation.shiftTemplateId } ?: return@forEach
-            if (result.none { it.first.id == shift.id && it.second == reservation.serviceDate }) {
-                result += shift to reservation.serviceDate
-            }
-        }
-        return result.distinctBy { it.first.id + "|" + it.second }
-            .sortedBy { (shift, dateText) -> shiftWindow(shift, dateText)?.first ?: LocalDateTime.MAX }
-    }
-
-    fun riderHasActiveShiftNow(riderId: String, now: LocalDateTime = LocalDateTime.now()): Boolean =
-        shiftReservations.any { reservation ->
+    fun riderHasActiveShiftNow(riderId: String, now: LocalDateTime = LocalDateTime.now()): Boolean {
+        if (!shiftV2Ready) return false
+        return concreteShiftReservations.any { reservation ->
             if (reservation.riderId != riderId || reservation.status != ShiftReservationStatus.RESERVED) return@any false
-            val shift = shifts.firstOrNull { it.id == reservation.shiftTemplateId && it.enabled } ?: return@any false
-            val window = shiftWindow(shift, reservation.serviceDate) ?: return@any false
+            val shift = concreteShifts.firstOrNull {
+                it.id == reservation.concreteShiftId && it.enabled
+            } ?: return@any false
+            val window = ShiftSchedulePolicy.window(shift) ?: return@any false
             !now.isBefore(window.first) && now.isBefore(window.second)
         }
+    }
 
     fun riderCanAccessNewOrdersDecision(riderId: String): RiderEligibilityDecision {
         val eligibility = riderCanViewShiftsDecision(riderId)
@@ -1514,140 +1447,196 @@ class MandadosController(context: Context) {
     fun riderCanAccessNewOrders(riderId: String): Boolean =
         riderCanAccessNewOrdersDecision(riderId).allowed
 
-    fun reserveShiftDecision(riderId: String, shiftId: String, serviceDate: String): RiderEligibilityDecision {
-        val eligibility = riderCanViewShiftsDecision(riderId)
-        if (!eligibility.allowed) return eligibility
-        val shift = shifts.firstOrNull { it.id == shiftId && it.enabled }
-            ?: return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
-        val window = shiftWindow(shift, serviceDate)
-            ?: return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
-        if (!LocalDateTime.now().isBefore(window.second)) {
-            return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
-        }
-        val existing = shiftReservations.firstOrNull {
-            it.riderId == riderId && it.shiftTemplateId == shiftId && it.serviceDate == serviceDate
-        }
-        if (existing?.status == ShiftReservationStatus.RESERVED) return RiderEligibilityDecision.ALLOWED
-        if (existing?.blockedRejoin == true) return RiderEligibilityDecision.denied(RiderDenialReason.REJOIN_BLOCKED)
-        if (existing?.lastCancelledAt != null) {
-            val cancelled = parseTimestamp(existing.lastCancelledAt)
-                ?: return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
-            if (Duration.between(cancelled, LocalDateTime.now()).toMinutes() < 15) {
-                return RiderEligibilityDecision.denied(RiderDenialReason.REJOIN_COOLDOWN)
+    fun reserveShiftDecision(riderId: String, concreteShiftId: String): RiderEligibilityDecision =
+        synchronized(shiftMutationLock) {
+            if (!shiftV2Ready) return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+            val eligibility = riderCanViewShiftsDecision(riderId)
+            if (!eligibility.allowed) return@synchronized eligibility
+            val shift = concreteShifts.firstOrNull { it.id == concreteShiftId && it.enabled }
+                ?: return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+            val window = ShiftSchedulePolicy.window(shift)
+                ?: return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+            if (!LocalDateTime.now().isBefore(window.second)) {
+                return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
             }
+            val existing = concreteShiftReservations.firstOrNull {
+                it.riderId == riderId && it.concreteShiftId == concreteShiftId
+            }
+            if (existing?.status == ShiftReservationStatus.RESERVED) return@synchronized RiderEligibilityDecision.ALLOWED
+            if (existing?.blockedRejoin == true) return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.REJOIN_BLOCKED)
+            existing?.lastCancelledAt?.let { raw ->
+                val cancelled = parseTimestamp(raw)
+                    ?: return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+                if (Duration.between(cancelled, LocalDateTime.now()).toMinutes() < 15) {
+                    return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.REJOIN_COOLDOWN)
+                }
+            }
+            val overlap = concreteShiftReservations.any { reservation ->
+                reservation.riderId == riderId &&
+                    reservation.status == ShiftReservationStatus.RESERVED &&
+                    reservation.concreteShiftId != concreteShiftId &&
+                    concreteShifts.firstOrNull { it.id == reservation.concreteShiftId }
+                        ?.let { ShiftSchedulePolicy.overlaps(it, shift) } == true
+            }
+            if (overlap) return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+            val occupied = concreteShiftReservations.count {
+                it.concreteShiftId == concreteShiftId && it.status == ShiftReservationStatus.RESERVED
+            }
+            if (occupied >= shift.capacity) return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_FULL)
+            RiderEligibilityDecision.ALLOWED
         }
-        val occupied = shiftReservations.count {
-            it.shiftTemplateId == shiftId && it.serviceDate == serviceDate && it.status == ShiftReservationStatus.RESERVED
-        }
-        if (occupied >= shift.capacity) return RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_FULL)
-        return RiderEligibilityDecision.ALLOWED
-    }
 
-    fun reserveShiftWithDecision(riderId: String, shiftId: String, serviceDate: String): RiderEligibilityDecision {
-        val decision = reserveShiftDecision(riderId, shiftId, serviceDate)
-        if (!decision.allowed) return decision
-        val existing = shiftReservations.firstOrNull {
-            it.riderId == riderId && it.shiftTemplateId == shiftId && it.serviceDate == serviceDate
-        }
-        if (existing?.status == ShiftReservationStatus.RESERVED) return RiderEligibilityDecision.ALLOWED
-        val nowText = nowText()
-        val reservation = if (existing == null) {
-            RiderShiftReservation(
-                id = "SHR-" + System.currentTimeMillis(),
-                riderId = riderId,
-                shiftTemplateId = shiftId,
-                serviceDate = serviceDate,
-                joinedAt = nowText
+    fun reserveShiftWithDecision(riderId: String, concreteShiftId: String): RiderEligibilityDecision =
+        synchronized(shiftMutationLock) {
+            val decision = reserveShiftDecision(riderId, concreteShiftId)
+            if (!decision.allowed) return@synchronized decision
+            val shift = concreteShifts.firstOrNull { it.id == concreteShiftId }
+                ?: return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+            val existing = concreteShiftReservations.firstOrNull {
+                it.riderId == riderId && it.concreteShiftId == concreteShiftId
+            }
+            if (existing?.status == ShiftReservationStatus.RESERVED) return@synchronized RiderEligibilityDecision.ALLOWED
+            val joinedAt = nowText()
+            val reservation = if (existing == null) {
+                ConcreteShiftReservation(
+                    id = "CSR-${UUID.randomUUID()}",
+                    riderId = riderId,
+                    concreteShiftId = concreteShiftId,
+                    joinedAt = joinedAt
+                )
+            } else {
+                existing.copy(status = ShiftReservationStatus.RESERVED, joinedAt = joinedAt, cancelledAt = null)
+            }
+            val finalReservations = concreteShiftReservations.filterNot { it.id == reservation.id } + reservation
+            val finalAudit = concreteShiftAuditEvents + concreteAuditEvent(
+                reservation, shift, ShiftEventType.RIDER_JOINED, riderId
             )
-        } else existing.copy(status = ShiftReservationStatus.RESERVED, joinedAt = nowText, cancelledAt = null)
-        shiftReservations = shiftReservations.filterNot { it.id == reservation.id } + reservation
-        store.saveShiftReservations(shiftReservations)
-        appendShiftAudit(reservation, ShiftEventType.RIDER_JOINED, riderId)
-        return RiderEligibilityDecision.ALLOWED
-    }
+            if (!shiftStoreV2.saveReservationsAndAudit(finalReservations, finalAudit)) {
+                return@synchronized RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+            }
+            concreteShiftReservations = finalReservations
+            concreteShiftAuditEvents = finalAudit
+            RiderEligibilityDecision.ALLOWED
+        }
 
-    fun reserveShift(riderId: String, shiftId: String, serviceDate: String): Boolean =
-        publishRiderDecision(reserveShiftWithDecision(riderId, shiftId, serviceDate)).allowed
+    fun reserveShift(riderId: String, concreteShiftId: String): Boolean =
+        publishRiderDecision(reserveShiftWithDecision(riderId, concreteShiftId)).allowed
 
-    fun canCancelShift(reservation: RiderShiftReservation): Boolean {
+    fun canCancelConcreteShift(reservation: ConcreteShiftReservation): Boolean {
         if (reservation.status != ShiftReservationStatus.RESERVED) return false
+        if (concreteShifts.none { it.id == reservation.concreteShiftId }) return false
         val joined = parseTimestamp(reservation.joinedAt) ?: return false
         return Duration.between(joined, LocalDateTime.now()).toMinutes() in 0..15
     }
 
-    fun cancelShift(reservationId: String): Boolean {
-        val r = shiftReservations.firstOrNull { it.id == reservationId } ?: return false
-        if (!hasAuthenticatedRiderSession(r.riderId)) return false
-        if (!canCancelShift(r)) return false
+    fun cancelConcreteShift(reservationId: String): Boolean = synchronized(shiftMutationLock) {
+        if (!shiftV2Ready) return@synchronized false
+        val current = concreteShiftReservations.firstOrNull { it.id == reservationId } ?: return@synchronized false
+        if (!hasAuthenticatedRiderSession(current.riderId) || !canCancelConcreteShift(current)) return@synchronized false
+        val shift = concreteShifts.firstOrNull { it.id == current.concreteShiftId } ?: return@synchronized false
         val now = nowText()
-        val newCount = r.cancellationCount + 1
-        val updated = r.copy(
+        val count = current.cancellationCount + 1
+        val updated = current.copy(
             status = ShiftReservationStatus.CANCELLED,
             cancelledAt = now,
             lastCancelledAt = now,
-            cancellationCount = newCount,
-            blockedRejoin = newCount >= 2
+            cancellationCount = count,
+            blockedRejoin = count >= 2
         )
-        shiftReservations = shiftReservations.map { if (it.id == reservationId) updated else it }
-        store.saveShiftReservations(shiftReservations)
-        appendShiftAudit(updated, ShiftEventType.RIDER_CANCELLED, r.riderId)
-        disableAvailabilityIfNoActiveShift(r.riderId)
-        return true
+        val finalReservations = concreteShiftReservations.map { if (it.id == reservationId) updated else it }
+        val finalAudit = concreteShiftAuditEvents + concreteAuditEvent(
+            updated, shift, ShiftEventType.RIDER_CANCELLED, current.riderId
+        )
+        if (!shiftStoreV2.saveReservationsAndAudit(finalReservations, finalAudit)) return@synchronized false
+        concreteShiftReservations = finalReservations
+        concreteShiftAuditEvents = finalAudit
+        disableAvailabilityIfNoActiveShift(current.riderId)
+        true
     }
 
-    fun adminAddRiderToShift(riderId: String, shiftId: String, serviceDate: String): Boolean {
-        val target = rider(riderId) ?: return false
-        if (!riderAccountEligibility(target).allowed) return false
-        val shift = shifts.firstOrNull { it.id == shiftId && it.enabled } ?: return false
-        val occupied = shiftReservations.count {
-            it.shiftTemplateId == shiftId && it.serviceDate == serviceDate && it.status == ShiftReservationStatus.RESERVED
+    fun adminAddRiderToShift(riderId: String, concreteShiftId: String): Boolean =
+        synchronized(shiftMutationLock) {
+            if (!shiftV2Ready) return@synchronized false
+            val target = rider(riderId) ?: return@synchronized false
+            if (!riderAccountEligibility(target).allowed) return@synchronized false
+            val shift = concreteShifts.firstOrNull { it.id == concreteShiftId && it.enabled } ?: return@synchronized false
+            val window = ShiftSchedulePolicy.window(shift) ?: return@synchronized false
+            if (!LocalDateTime.now().isBefore(window.second)) return@synchronized false
+            val existing = concreteShiftReservations.firstOrNull {
+                it.riderId == riderId && it.concreteShiftId == concreteShiftId
+            }
+            if (existing?.status == ShiftReservationStatus.RESERVED) return@synchronized true
+            val overlap = concreteShiftReservations.any { reservation ->
+                reservation.riderId == riderId &&
+                    reservation.status == ShiftReservationStatus.RESERVED &&
+                    reservation.concreteShiftId != concreteShiftId &&
+                    concreteShifts.firstOrNull { it.id == reservation.concreteShiftId }
+                        ?.let { ShiftSchedulePolicy.overlaps(it, shift) } == true
+            }
+            if (overlap) return@synchronized false
+            val occupied = concreteShiftReservations.count {
+                it.concreteShiftId == concreteShiftId && it.status == ShiftReservationStatus.RESERVED
+            }
+            if (occupied >= shift.capacity) return@synchronized false
+            val now = nowText()
+            val reservation = if (existing == null) {
+                ConcreteShiftReservation(
+                    id = "CSR-${UUID.randomUUID()}",
+                    riderId = riderId,
+                    concreteShiftId = concreteShiftId,
+                    joinedAt = now
+                )
+            } else {
+                existing.copy(status = ShiftReservationStatus.RESERVED, joinedAt = now, cancelledAt = null)
+            }
+            val finalReservations = concreteShiftReservations.filterNot { it.id == reservation.id } + reservation
+            val finalAudit = concreteShiftAuditEvents + concreteAuditEvent(
+                reservation, shift, ShiftEventType.ADMIN_ADDED, "ADMIN"
+            )
+            if (!shiftStoreV2.saveReservationsAndAudit(finalReservations, finalAudit)) return@synchronized false
+            concreteShiftReservations = finalReservations
+            concreteShiftAuditEvents = finalAudit
+            true
         }
-        val existing = shiftReservations.firstOrNull {
-            it.riderId == riderId && it.shiftTemplateId == shiftId && it.serviceDate == serviceDate
-        }
-        if (existing?.status == ShiftReservationStatus.RESERVED) return true
-        if (occupied >= shift.capacity) return false
-        val now = nowText()
-        val reservation = if (existing == null) {
-            RiderShiftReservation("SHR-" + System.currentTimeMillis(), riderId, shiftId, serviceDate, now)
-        } else existing.copy(status = ShiftReservationStatus.RESERVED, joinedAt = now, cancelledAt = null)
-        shiftReservations = shiftReservations.filterNot { it.id == reservation.id } + reservation
-        store.saveShiftReservations(shiftReservations)
-        appendShiftAudit(reservation, ShiftEventType.ADMIN_ADDED, "ADMIN")
-        return true
-    }
 
-    fun adminRemoveRiderFromShift(reservationId: String): Boolean {
-        val r = shiftReservations.firstOrNull { it.id == reservationId } ?: return false
-        if (r.status != ShiftReservationStatus.RESERVED) return false
+    fun adminRemoveRiderFromConcreteShift(reservationId: String): Boolean = synchronized(shiftMutationLock) {
+        if (!shiftV2Ready) return@synchronized false
+        val current = concreteShiftReservations.firstOrNull { it.id == reservationId } ?: return@synchronized false
+        if (current.status != ShiftReservationStatus.RESERVED) return@synchronized false
+        val shift = concreteShifts.firstOrNull { it.id == current.concreteShiftId } ?: return@synchronized false
         val now = nowText()
-        val updated = r.copy(
+        val updated = current.copy(
             status = ShiftReservationStatus.CANCELLED,
             cancelledAt = now,
             lastCancelledAt = now,
             blockedRejoin = true
         )
-        shiftReservations = shiftReservations.map { if (it.id == reservationId) updated else it }
-        store.saveShiftReservations(shiftReservations)
-        appendShiftAudit(updated, ShiftEventType.ADMIN_REMOVED, "ADMIN")
-        disableAvailabilityIfNoActiveShift(r.riderId)
-        return true
+        val finalReservations = concreteShiftReservations.map { if (it.id == reservationId) updated else it }
+        val finalAudit = concreteShiftAuditEvents + concreteAuditEvent(
+            updated, shift, ShiftEventType.ADMIN_REMOVED, "ADMIN"
+        )
+        if (!shiftStoreV2.saveReservationsAndAudit(finalReservations, finalAudit)) return@synchronized false
+        concreteShiftReservations = finalReservations
+        concreteShiftAuditEvents = finalAudit
+        disableAvailabilityIfNoActiveShift(current.riderId)
+        true
     }
 
-    private fun appendShiftAudit(r: RiderShiftReservation, type: ShiftEventType, actor: String) {
-        val event = ShiftAuditEvent(
-            id = "SHE-" + System.currentTimeMillis() + "-" + shiftAuditEvents.size,
-            reservationId = r.id,
-            shiftTemplateId = r.shiftTemplateId,
-            riderId = r.riderId,
-            serviceDate = r.serviceDate,
-            type = type,
-            at = nowText(),
-            actor = actor
-        )
-        shiftAuditEvents = shiftAuditEvents + event
-        store.saveShiftAuditEvents(shiftAuditEvents)
-    }
+    private fun concreteAuditEvent(
+        reservation: ConcreteShiftReservation,
+        shift: ConcreteShift,
+        type: ShiftEventType,
+        actor: String
+    ): ConcreteShiftAuditEvent = ConcreteShiftAuditEvent(
+        id = "CSE-${UUID.randomUUID()}",
+        reservationId = reservation.id,
+        concreteShiftId = reservation.concreteShiftId,
+        riderId = reservation.riderId,
+        serviceDate = shift.serviceDate,
+        type = type,
+        at = nowText(),
+        actor = actor
+    )
 
     private fun disableAvailabilityIfNoActiveShift(riderId: String) {
         if (riderHasActiveShiftNow(riderId)) return
@@ -1655,10 +1644,82 @@ class MandadosController(context: Context) {
         store.saveRiders(riders)
     }
 
-    fun minutesUntilRiderCanRejoin(reservation: RiderShiftReservation): Long {
+    private fun disableAvailabilityIfNoActiveShiftForAll() {
+        riders.filter { it.available }.forEach { disableAvailabilityIfNoActiveShift(it.id) }
+    }
+
+    fun minutesUntilRiderCanRejoin(reservation: ConcreteShiftReservation): Long {
         val at = reservation.lastCancelledAt?.let(::parseTimestamp) ?: return 0
         return (15 - Duration.between(at, LocalDateTime.now()).toMinutes()).coerceAtLeast(0)
     }
+
+    // V1 Alpha APIs are kept only as inert compile-time compatibility. No operational flow reads legacy keys.
+    @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
+    fun saveShiftTemplate(shift: ShiftTemplate) = Unit
+
+    @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
+    fun isShiftActiveNow(shift: ShiftTemplate, now: LocalDateTime = LocalDateTime.now()): Boolean = false
+
+    @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
+    fun canDeleteShiftTemplate(id: String): Boolean = false
+
+    @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
+    fun deleteShiftTemplate(id: String): Boolean = false
+
+    @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
+    fun addShiftTemplatesBulk(days: Set<Int>, ranges: List<Pair<String, String>>, capacity: Int): String? =
+        "El modelo semanal legacy fue retirado."
+
+    @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
+    fun addSpecificDateShifts(dateText: String, ranges: List<Pair<String, String>>, capacity: Int): String? =
+        "El modelo de fecha específica legacy fue retirado."
+
+    @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
+    fun updateShiftTemplate(
+        id: String,
+        recurring: Boolean,
+        dayOfWeek: Int,
+        specificDate: String?,
+        rawStart: String,
+        rawEnd: String,
+        capacity: Int,
+        enabled: Boolean
+    ): String? = "El modelo legacy fue retirado."
+
+    fun normalizeClock(raw: String, allow24: Boolean): String? =
+        ShiftSchedulePolicy.parseClock(raw, allow24)?.let(ShiftSchedulePolicy::formatMinute)
+
+    @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
+    fun shiftWindow(shift: ShiftTemplate, serviceDate: String): Pair<LocalDateTime, LocalDateTime>? = null
+
+    @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
+    fun shiftOccurrences(from: LocalDate, to: LocalDate): List<Pair<ShiftTemplate, String>> = emptyList()
+
+    @Deprecated("Caller-provided serviceDate is disabled by TODO-3A")
+    fun reserveShiftDecision(riderId: String, shiftId: String, serviceDate: String): RiderEligibilityDecision =
+        RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+
+    @Deprecated("Caller-provided serviceDate is disabled by TODO-3A")
+    fun reserveShiftWithDecision(riderId: String, shiftId: String, serviceDate: String): RiderEligibilityDecision =
+        RiderEligibilityDecision.denied(RiderDenialReason.SHIFT_NOT_AVAILABLE)
+
+    @Deprecated("Caller-provided serviceDate is disabled by TODO-3A")
+    fun reserveShift(riderId: String, shiftId: String, serviceDate: String): Boolean = false
+
+    @Deprecated("Legacy shift reservation is disabled by TODO-3A")
+    fun canCancelShift(reservation: RiderShiftReservation): Boolean = false
+
+    @Deprecated("Legacy shift reservation is disabled by TODO-3A")
+    fun cancelShift(reservationId: String): Boolean = false
+
+    @Deprecated("Caller-provided serviceDate is disabled by TODO-3A")
+    fun adminAddRiderToShift(riderId: String, shiftId: String, serviceDate: String): Boolean = false
+
+    @Deprecated("Legacy shift reservation is disabled by TODO-3A")
+    fun adminRemoveRiderFromShift(reservationId: String): Boolean = false
+
+    @Deprecated("Legacy shift reservation is disabled by TODO-3A")
+    fun minutesUntilRiderCanRejoin(reservation: RiderShiftReservation): Long = 0
 
     fun dayName(day: Int): String = when (day) {
         1 -> "Lunes"; 2 -> "Martes"; 3 -> "Miércoles"; 4 -> "Jueves"; 5 -> "Viernes"; 6 -> "Sábado"; else -> "Domingo"
