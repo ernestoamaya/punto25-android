@@ -249,7 +249,7 @@ internal fun AdminOrderDetailV2Screen(c: MandadosController, id: String?, onBack
     }
 
     if (assignOpen && order != null && c.canAssignRider(order)) {
-        AlertDialog(
+        Punto25AlertDialog(
             onDismissRequest = { assignOpen = false },
             title = { Text("Asignar Repartidor") },
             text = {
@@ -290,11 +290,22 @@ private fun OrderEditDialog(
     onDismiss: () -> Unit,
     onSave: (OrderDraft, String) -> Unit
 ) {
-    var edited by remember(order.id) { mutableStateOf(c.draftFromOrder(order)) }
+    val initialEdited = remember(order.id) { c.draftFromOrder(order) }
+    var edited by remember(order.id) { mutableStateOf(initialEdited) }
     var reason by rememberSaveable(order.id) { mutableStateOf("") }
+    var confirmDiscard by remember(order.id) { mutableStateOf(false) }
+    val dirty = edited != initialEdited || reason.isNotEmpty()
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
+    fun requestDismiss(source: PendingEditDismissSource) {
+        when (pendingEditDismissDecision(source, dirty)) {
+            PendingEditDismissDecision.KEEP_OPEN -> Unit
+            PendingEditDismissDecision.CLOSE -> onDismiss()
+            PendingEditDismissDecision.CONFIRM_DISCARD -> confirmDiscard = true
+        }
+    }
+
+    Punto25AlertDialog(
+        onDismissRequest = { requestDismiss(PendingEditDismissSource.BACK) },
         title = { Text("Editar pedido · ${order.id}") },
         text = {
             Column(Modifier.heightIn(max = 650.dp).verticalScroll(rememberScrollState())) {
@@ -338,9 +349,19 @@ private fun OrderEditDialog(
         confirmButton = {
             TextButton(onClick = { onSave(edited, reason) }, enabled = reason.trim().isNotBlank()) { Text("GUARDAR") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCELAR") } }
+        dismissButton = {
+            TextButton(onClick = { requestDismiss(PendingEditDismissSource.CANCEL) }) { Text("CANCELAR") }
+        }
     )
+
+    if (confirmDiscard) {
+        DiscardChangesDialog(
+            onKeepEditing = { confirmDiscard = false },
+            onDiscard = { confirmDiscard = false; onDismiss() }
+        )
+    }
 }
+
 
 @Composable
 internal fun AdminReportsScreen(c: MandadosController, onBack: () -> Unit) {
@@ -501,7 +522,7 @@ internal fun RidersAdminScreenV2(c: MandadosController, onBack: () -> Unit, onWo
     accessRiderId?.let { riderId ->
         c.rider(riderId)?.let { rider ->
             val reset = c.hasRiderCredential(rider.id)
-            AlertDialog(
+            Punto25AlertDialog(
                 onDismissRequest = { accessRiderId = null },
                 title = { Text(if (reset) "Resetear acceso" else "Enviar invitación") },
                 text = {
@@ -540,8 +561,13 @@ internal fun RidersAdminScreenV2(c: MandadosController, onBack: () -> Unit, onWo
             onDismiss = { editOpen = false },
             onSave = { name, phone, birth, vehicle, address, docs, limit, approval ->
                 val savedId = c.saveRider(editingId, name, phone, birth, vehicle, address, docs, limit)
-                savedId?.let { c.setRiderApprovalStatus(it, approval) }
-                editOpen = false
+                if (savedId != null) {
+                    c.setRiderApprovalStatus(savedId, approval)
+                    editOpen = false
+                    true
+                } else {
+                    false
+                }
             }
         )
     }
@@ -556,7 +582,7 @@ private fun RiderEditDialog(
     c: MandadosController,
     rider: RiderProfile?,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, VehicleType, String, RiderDocuments, Int?, RiderApprovalStatus) -> Unit
+    onSave: (String, String, String, VehicleType, String, RiderDocuments, Int?, RiderApprovalStatus) -> Boolean
 ) {
     val context = LocalContext.current
     var name by remember(rider?.id) { mutableStateOf(rider?.name ?: "") }
@@ -568,6 +594,20 @@ private fun RiderEditDialog(
     var approval by remember(rider?.id) { mutableStateOf(rider?.approvalStatus ?: RiderApprovalStatus.PENDING) }
     var docs by remember(rider?.id) { mutableStateOf(rider?.documents ?: RiderDocuments()) }
     var pendingKey by remember { mutableStateOf<RiderDocumentKey?>(null) }
+    var confirmDiscard by remember(rider?.id) { mutableStateOf(false) }
+    var saveError by remember(rider?.id) { mutableStateOf("") }
+
+    val initialSnapshot = remember(rider?.id) { riderEditSnapshot(rider) }
+    val currentSnapshot = riderEditSnapshot(name, phone, birth, vehicle, address, limitText.toIntOrNull(), docs, approval)
+    val dirty = isRiderEditDirty(initialSnapshot, currentSnapshot)
+
+    fun requestDismiss(source: PendingEditDismissSource) {
+        when (pendingEditDismissDecision(source, dirty)) {
+            PendingEditDismissDecision.KEEP_OPEN -> Unit
+            PendingEditDismissDecision.CLOSE -> onDismiss()
+            PendingEditDismissDecision.CONFIRM_DISCARD -> confirmDiscard = true
+        }
+    }
 
     val picker = rememberLauncherForActivityResult(PickVisualMedia()) { uri ->
         val key = pendingKey
@@ -578,17 +618,18 @@ private fun RiderEditDialog(
         pendingKey = null
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
+    Punto25AlertDialog(
+        onDismissRequest = { requestDismiss(PendingEditDismissSource.BACK) },
         title = { Text(if (rider == null) "Alta de Repartidor" else "Editar Repartidor") },
         text = {
             Column(Modifier.heightIn(max = 650.dp).verticalScroll(rememberScrollState())) {
-                SimpleField("Nombre y apellido completos *", name) { name = it }
-                SimpleField("Teléfono", phone, KeyboardType.Phone) { phone = it.filter(Char::isDigit).take(15) }
-                SimpleField("Fecha de nacimiento DD/MM/AAAA", birth, KeyboardType.Number) { birth = it.take(10) }
-                SimpleField("Domicilio", address) { address = it }
+                SimpleField("Nombre y apellido completos *", name) { name = it; saveError = "" }
+                SimpleField("Teléfono", phone, KeyboardType.Phone) { phone = it.filter(Char::isDigit).take(15); saveError = "" }
+                SimpleField("Fecha de nacimiento DD/MM/AAAA", birth, KeyboardType.Number) { birth = it.take(10); saveError = "" }
+                SimpleField("Domicilio", address) { address = it; saveError = "" }
                 SimpleField("Máximo simultáneo (vacío = general ${c.config.defaultMaxConcurrentOrders})", limitText, KeyboardType.Number) {
                     limitText = it.filter(Char::isDigit).take(2)
+                    saveError = ""
                 }
 
                 SectionTitle("Estado operativo")
@@ -598,48 +639,90 @@ private fun RiderEditDialog(
                     RiderApprovalStatus.entries,
                     allLabel = "",
                     labelFor = ::riderApprovalText,
-                    onSelect = { if (it != null) approval = it }
+                    onSelect = { if (it != null) { approval = it; saveError = "" } }
                 )
                 AssistCard("Habilitado permite ponerse Disponible y tomar pedidos. Pendiente o Suspendido bloquean esa operación.")
 
                 SectionTitle("Vehículo")
-                RadioLine("Moto", vehicle == VehicleType.MOTORCYCLE) { vehicle = VehicleType.MOTORCYCLE }
-                RadioLine("Bicicleta", vehicle == VehicleType.BICYCLE) { vehicle = VehicleType.BICYCLE }
+                RadioLine("Moto", vehicle == VehicleType.MOTORCYCLE) { vehicle = VehicleType.MOTORCYCLE; saveError = "" }
+                RadioLine("Bicicleta", vehicle == VehicleType.BICYCLE) { vehicle = VehicleType.BICYCLE; saveError = "" }
 
                 SectionTitle("Carga / reemplazo de documentación")
-                DocumentEditLine("DNI · anverso", docs.dniFrontUri, { pendingKey = RiderDocumentKey.DNI_FRONT; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.DNI_FRONT, null) }
-                DocumentEditLine("DNI · reverso", docs.dniBackUri, { pendingKey = RiderDocumentKey.DNI_BACK; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.DNI_BACK, null) }
+                DocumentEditLine("DNI · anverso", docs.dniFrontUri, { pendingKey = RiderDocumentKey.DNI_FRONT; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.DNI_FRONT, null); saveError = "" }
+                DocumentEditLine("DNI · reverso", docs.dniBackUri, { pendingKey = RiderDocumentKey.DNI_BACK; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.DNI_BACK, null); saveError = "" }
                 if (vehicle == VehicleType.MOTORCYCLE) {
-                    DocumentEditLine("Patente", docs.motorcyclePlateUri, { pendingKey = RiderDocumentKey.MOTORCYCLE_PLATE; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.MOTORCYCLE_PLATE, null) }
-                    DocumentEditLine("Licencia · anverso", docs.driverLicenseFrontUri, { pendingKey = RiderDocumentKey.DRIVER_LICENSE_FRONT; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.DRIVER_LICENSE_FRONT, null) }
-                    DocumentEditLine("Licencia · reverso", docs.driverLicenseBackUri, { pendingKey = RiderDocumentKey.DRIVER_LICENSE_BACK; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.DRIVER_LICENSE_BACK, null) }
-                    DocumentEditLine("Tarjeta verde/azul", docs.vehicleCardUri, { pendingKey = RiderDocumentKey.VEHICLE_CARD; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.VEHICLE_CARD, null) }
-                    DocumentEditLine("Seguro", docs.insuranceCardUri, { pendingKey = RiderDocumentKey.INSURANCE_CARD; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.INSURANCE_CARD, null) }
+                    DocumentEditLine("Patente", docs.motorcyclePlateUri, { pendingKey = RiderDocumentKey.MOTORCYCLE_PLATE; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.MOTORCYCLE_PLATE, null); saveError = "" }
+                    DocumentEditLine("Licencia · anverso", docs.driverLicenseFrontUri, { pendingKey = RiderDocumentKey.DRIVER_LICENSE_FRONT; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.DRIVER_LICENSE_FRONT, null); saveError = "" }
+                    DocumentEditLine("Licencia · reverso", docs.driverLicenseBackUri, { pendingKey = RiderDocumentKey.DRIVER_LICENSE_BACK; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.DRIVER_LICENSE_BACK, null); saveError = "" }
+                    DocumentEditLine("Tarjeta verde/azul", docs.vehicleCardUri, { pendingKey = RiderDocumentKey.VEHICLE_CARD; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.VEHICLE_CARD, null); saveError = "" }
+                    DocumentEditLine("Seguro", docs.insuranceCardUri, { pendingKey = RiderDocumentKey.INSURANCE_CARD; picker.launch(PickVisualMediaRequest(ImageOnly)) }) { docs = docs.withUri(RiderDocumentKey.INSURANCE_CARD, null); saveError = "" }
                 }
+                if (saveError.isNotBlank()) Text(saveError, color = MaterialTheme.colorScheme.error)
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(name, phone, birth, vehicle, address, docs, limitText.toIntOrNull(), approval) },
+                onClick = {
+                    val saved = onSave(name, phone, birth, vehicle, address, docs, limitText.toIntOrNull(), approval)
+                    if (!saved) saveError = "No se pudo guardar el Repartidor. Revisá los datos e intentá nuevamente."
+                },
                 enabled = name.trim().isNotBlank()
             ) { Text("GUARDAR") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCELAR") } }
+        dismissButton = {
+            TextButton(onClick = { requestDismiss(PendingEditDismissSource.CANCEL) }) { Text("CANCELAR") }
+        }
     )
+
+    if (confirmDiscard) {
+        DiscardChangesDialog(
+            onKeepEditing = { confirmDiscard = false },
+            onDiscard = { confirmDiscard = false; onDismiss() }
+        )
+    }
 }
 
 @Composable
 private fun RiderDocumentsDialog(c: MandadosController, rider: RiderProfile, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
+    val keys = remember(rider.id, rider.vehicleType) {
+        if (rider.vehicleType == VehicleType.MOTORCYCLE) RiderDocumentKey.entries
+        else listOf(RiderDocumentKey.DNI_FRONT, RiderDocumentKey.DNI_BACK)
+    }
+    val startingNotes = remember(rider.id) { keys.associateWith { rider.documentNotes[it].orEmpty() } }
+    var savedNotes by remember(rider.id) { mutableStateOf(startingNotes) }
+    var noteDrafts by remember(rider.id) { mutableStateOf(startingNotes) }
+    var confirmDiscard by remember(rider.id) { mutableStateOf(false) }
+    val dirty = noteDrafts != savedNotes
+
+    fun requestDismiss(source: PendingEditDismissSource) {
+        when (pendingEditDismissDecision(source, dirty)) {
+            PendingEditDismissDecision.KEEP_OPEN -> Unit
+            PendingEditDismissDecision.CLOSE -> onDismiss()
+            PendingEditDismissDecision.CONFIRM_DISCARD -> confirmDiscard = true
+        }
+    }
+
+    Punto25AlertDialog(
+        onDismissRequest = { requestDismiss(PendingEditDismissSource.BACK) },
         title = { Text("Documentación · ${rider.name}") },
         text = {
             Column(Modifier.heightIn(max = 650.dp).verticalScroll(rememberScrollState())) {
                 Text("Estado del Repartidor: ${riderApprovalText(rider.approvalStatus)}", fontWeight = FontWeight.Bold)
                 Text("El estado se administra desde Editar Repartidor.", style = MaterialTheme.typography.bodySmall)
-                val keys = if (rider.vehicleType == VehicleType.MOTORCYCLE) RiderDocumentKey.entries
-                else listOf(RiderDocumentKey.DNI_FRONT, RiderDocumentKey.DNI_BACK)
-                keys.forEach { key -> DocumentReviewCard(c, rider, key) }
+                keys.forEach { key ->
+                    DocumentReviewCard(
+                        rider = rider,
+                        key = key,
+                        note = noteDrafts[key].orEmpty(),
+                        onNoteChange = { value -> noteDrafts = noteDrafts + (key to value) },
+                        onReview = { status ->
+                            val persistedNote = noteDrafts[key].orEmpty().trim()
+                            c.setRiderDocumentReview(rider.id, key, status, persistedNote)
+                            noteDrafts = noteDrafts + (key to persistedNote)
+                            savedNotes = savedNotes + (key to persistedNote)
+                        }
+                    )
+                }
 
                 if (rider.approvalStatus != RiderApprovalStatus.APPROVED) {
                     Button(
@@ -649,14 +732,28 @@ private fun RiderDocumentsDialog(c: MandadosController, rider: RiderProfile, onD
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("CERRAR") } }
+        confirmButton = {
+            TextButton(onClick = { requestDismiss(PendingEditDismissSource.CANCEL) }) { Text("CERRAR") }
+        }
     )
+
+    if (confirmDiscard) {
+        DiscardChangesDialog(
+            onKeepEditing = { confirmDiscard = false },
+            onDiscard = { confirmDiscard = false; onDismiss() }
+        )
+    }
 }
 
 @Composable
-private fun DocumentReviewCard(c: MandadosController, rider: RiderProfile, key: RiderDocumentKey) {
+private fun DocumentReviewCard(
+    rider: RiderProfile,
+    key: RiderDocumentKey,
+    note: String,
+    onNoteChange: (String) -> Unit,
+    onReview: (DocumentReviewStatus) -> Unit
+) {
     val uri = rider.documents.uriFor(key)
-    var note by remember(rider.id, key, rider.documentNotes[key]) { mutableStateOf(rider.documentNotes[key] ?: "") }
 
     Card(Modifier.fillMaxWidth().padding(top = 9.dp)) {
         Column(Modifier.padding(12.dp)) {
@@ -666,16 +763,17 @@ private fun DocumentReviewCard(c: MandadosController, rider: RiderProfile, key: 
                 Text("Sin imagen cargada.")
             } else {
                 LocalDocumentImage(uri)
-                OutlinedTextField(note, { note = it }, label = { Text("Observación del Admin") }, minLines = 2, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(note, onNoteChange, label = { Text("Observación del Admin") }, minLines = 2, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(rider.reviewFor(key) == DocumentReviewStatus.PENDING, { c.setRiderDocumentReview(rider.id, key, DocumentReviewStatus.PENDING, note) }, { Text("Pendiente") })
-                    FilterChip(rider.reviewFor(key) == DocumentReviewStatus.APPROVED, { c.setRiderDocumentReview(rider.id, key, DocumentReviewStatus.APPROVED, note) }, { Text("Aprobar") })
-                    FilterChip(rider.reviewFor(key) == DocumentReviewStatus.REJECTED, { c.setRiderDocumentReview(rider.id, key, DocumentReviewStatus.REJECTED, note) }, { Text("Rechazar") })
+                    FilterChip(rider.reviewFor(key) == DocumentReviewStatus.PENDING, { onReview(DocumentReviewStatus.PENDING) }, { Text("Pendiente") })
+                    FilterChip(rider.reviewFor(key) == DocumentReviewStatus.APPROVED, { onReview(DocumentReviewStatus.APPROVED) }, { Text("Aprobar") })
+                    FilterChip(rider.reviewFor(key) == DocumentReviewStatus.REJECTED, { onReview(DocumentReviewStatus.REJECTED) }, { Text("Rechazar") })
                 }
             }
         }
     }
 }
+
 
 @Composable
 private fun LocalDocumentImage(uriString: String) {
@@ -1190,7 +1288,7 @@ private fun RiderShifts(c: MandadosController, rider: RiderProfile) {
     confirmReservationId?.let { id ->
         val reservation = c.shiftReservations.firstOrNull { it.id == id }
         val secondCancellation = (reservation?.cancellationCount ?: 0) >= 1
-        AlertDialog(
+        Punto25AlertDialog(
             onDismissRequest = { confirmReservationId = null },
             title = { Text("Cancelar inscripción") },
             text = {
@@ -1575,7 +1673,7 @@ internal fun AdminShiftsScreen(c: MandadosController, onBack: () -> Unit) {
     }
 
     deleteShift?.let { shift ->
-        AlertDialog(
+        Punto25AlertDialog(
             onDismissRequest = { deleteShift = null },
             title = { Text("Eliminar turno") },
             text = { Text("¿Confirmás que querés eliminar este turno? Esta acción no se puede deshacer.") },
@@ -1596,7 +1694,7 @@ internal fun AdminShiftsScreen(c: MandadosController, onBack: () -> Unit) {
         val existing = c.shiftReservations.filter {
             it.shiftTemplateId == shift.id && it.serviceDate == date && it.status == ShiftReservationStatus.RESERVED
         }.map { it.riderId }.toSet()
-        AlertDialog(
+        Punto25AlertDialog(
             onDismissRequest = { addToShift = null },
             title = { Text("Agregar Repartidor") },
             text = {
@@ -1618,7 +1716,7 @@ internal fun AdminShiftsScreen(c: MandadosController, onBack: () -> Unit) {
     }
 
     removeReservationId?.let { id ->
-        AlertDialog(
+        Punto25AlertDialog(
             onDismissRequest = { removeReservationId = null },
             title = { Text("Quitar Repartidor del turno") },
             text = { Text("¿Confirmás que querés quitar al Repartidor de esta ocurrencia? Si el turno está en curso pasará a No disponible, pero conservará sus pedidos activos.") },
@@ -1635,17 +1733,30 @@ internal fun AdminShiftsScreen(c: MandadosController, onBack: () -> Unit) {
 
 @Composable
 private fun ShiftEditDialog(c: MandadosController, shift: ShiftTemplate, onDismiss: () -> Unit) {
-    var recurring by remember(shift.id) { mutableStateOf(!shift.isSpecificDate) }
+    val initialRecurring = !shift.isSpecificDate
+    val initialDate = shift.specificDate ?: LocalDate.now().format(dateFormatter)
+    var recurring by remember(shift.id) { mutableStateOf(initialRecurring) }
     var day by remember(shift.id) { mutableStateOf(shift.dayOfWeek) }
-    var date by remember(shift.id) { mutableStateOf(shift.specificDate ?: LocalDate.now().format(dateFormatter)) }
+    var date by remember(shift.id) { mutableStateOf(initialDate) }
     var start by remember(shift.id) { mutableStateOf(shift.startTime) }
     var end by remember(shift.id) { mutableStateOf(shift.endTime) }
     var capacity by remember(shift.id) { mutableStateOf(shift.capacity.toString()) }
     var enabled by remember(shift.id) { mutableStateOf(shift.enabled) }
     var error by remember(shift.id) { mutableStateOf("") }
+    var confirmDiscard by remember(shift.id) { mutableStateOf(false) }
+    val dirty = recurring != initialRecurring || day != shift.dayOfWeek || date != initialDate ||
+        start != shift.startTime || end != shift.endTime || capacity != shift.capacity.toString() || enabled != shift.enabled
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
+    fun requestDismiss(source: PendingEditDismissSource) {
+        when (pendingEditDismissDecision(source, dirty)) {
+            PendingEditDismissDecision.KEEP_OPEN -> Unit
+            PendingEditDismissDecision.CLOSE -> onDismiss()
+            PendingEditDismissDecision.CONFIRM_DISCARD -> confirmDiscard = true
+        }
+    }
+
+    Punto25AlertDialog(
+        onDismissRequest = { requestDismiss(PendingEditDismissSource.BACK) },
         title = { Text("Editar turno") },
         text = {
             Column(Modifier.heightIn(max = 600.dp).verticalScroll(rememberScrollState())) {
@@ -1685,9 +1796,19 @@ private fun ShiftEditDialog(c: MandadosController, shift: ShiftTemplate, onDismi
                 if (error.isBlank()) onDismiss()
             }) { Text("GUARDAR") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCELAR") } }
+        dismissButton = {
+            TextButton(onClick = { requestDismiss(PendingEditDismissSource.CANCEL) }) { Text("CANCELAR") }
+        }
     )
+
+    if (confirmDiscard) {
+        DiscardChangesDialog(
+            onKeepEditing = { confirmDiscard = false },
+            onDiscard = { confirmDiscard = false; onDismiss() }
+        )
+    }
 }
+
 
 @Composable
 internal fun AdminPaymentsScreen(c: MandadosController, onBack: () -> Unit) {
@@ -1823,13 +1944,30 @@ internal fun AdminLegalScreen(c: MandadosController, onBack: () -> Unit) {
 private fun LegalPdfEditor(c: MandadosController, type: LegalDocumentType, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val existing = c.legalDocuments.filter { it.type == type }.maxByOrNull { parseOrderTime(it.updatedAt) ?: LocalDateTime.MIN }
-    var version by remember(type, existing?.id) { mutableStateOf(existing?.version ?: "1.0") }
-    var effective by remember(type, existing?.id) { mutableStateOf(existing?.effectiveDate ?: LocalDate.now().format(dateFormatter)) }
-    var published by remember(type, existing?.id) { mutableStateOf(existing?.published ?: false) }
-    var requireAcceptance by remember(type, existing?.id) { mutableStateOf(existing?.requireAcceptance ?: false) }
-    var selectedUri by remember(type, existing?.id) { mutableStateOf(existing?.fileUri) }
-    var selectedName by remember(type, existing?.id) { mutableStateOf(existing?.fileName) }
+    val initialVersion = existing?.version ?: "1.0"
+    val initialEffective = existing?.effectiveDate ?: LocalDate.now().format(dateFormatter)
+    val initialPublished = existing?.published ?: false
+    val initialRequireAcceptance = existing?.requireAcceptance ?: false
+    val initialUri = existing?.fileUri
+    val initialName = existing?.fileName
+    var version by remember(type, existing?.id) { mutableStateOf(initialVersion) }
+    var effective by remember(type, existing?.id) { mutableStateOf(initialEffective) }
+    var published by remember(type, existing?.id) { mutableStateOf(initialPublished) }
+    var requireAcceptance by remember(type, existing?.id) { mutableStateOf(initialRequireAcceptance) }
+    var selectedUri by remember(type, existing?.id) { mutableStateOf(initialUri) }
+    var selectedName by remember(type, existing?.id) { mutableStateOf(initialName) }
     var error by remember { mutableStateOf("") }
+    var confirmDiscard by remember(type, existing?.id) { mutableStateOf(false) }
+    val dirty = version != initialVersion || effective != initialEffective || published != initialPublished ||
+        requireAcceptance != initialRequireAcceptance || selectedUri != initialUri || selectedName != initialName
+
+    fun requestDismiss(source: PendingEditDismissSource) {
+        when (pendingEditDismissDecision(source, dirty)) {
+            PendingEditDismissDecision.KEEP_OPEN -> Unit
+            PendingEditDismissDecision.CLOSE -> onDismiss()
+            PendingEditDismissDecision.CONFIRM_DISCARD -> confirmDiscard = true
+        }
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -1842,8 +1980,8 @@ private fun LegalPdfEditor(c: MandadosController, type: LegalDocumentType, onDis
         }
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
+    Punto25AlertDialog(
+        onDismissRequest = { requestDismiss(PendingEditDismissSource.BACK) },
         title = { Text(legalTypeText(type)) },
         text = {
             Column(Modifier.heightIn(max = 600.dp).verticalScroll(rememberScrollState())) {
@@ -1890,9 +2028,19 @@ private fun LegalPdfEditor(c: MandadosController, type: LegalDocumentType, onDis
                 enabled = selectedUri != null
             ) { Text(if (existing?.published == true && existing.fileUri != selectedUri) "CREAR NUEVA VERSIÓN" else "GUARDAR") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("CERRAR") } }
+        dismissButton = {
+            TextButton(onClick = { requestDismiss(PendingEditDismissSource.CANCEL) }) { Text("CERRAR") }
+        }
     )
+
+    if (confirmDiscard) {
+        DiscardChangesDialog(
+            onKeepEditing = { confirmDiscard = false },
+            onDiscard = { confirmDiscard = false; onDismiss() }
+        )
+    }
 }
+
 
 @Composable
 private fun PermissionsScreen() {
@@ -2000,8 +2148,19 @@ internal fun DateRangePicker(from: String?, to: String?, onFrom: (String?) -> Un
 private fun DatePickerPopup(current: String?, onDismiss: () -> Unit, onSelected: (String?) -> Unit) {
     val initial = current?.let(::parseDate)?.atStartOfDay(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
     val state = rememberDatePickerState(initialSelectedDateMillis = initial)
+    var confirmDiscard by remember(current) { mutableStateOf(false) }
+    val dirty = state.selectedDateMillis != initial
+
+    fun requestDismiss() {
+        when (pendingEditDismissDecision(PendingEditDismissSource.BACK, dirty)) {
+            PendingEditDismissDecision.KEEP_OPEN -> Unit
+            PendingEditDismissDecision.CLOSE -> onDismiss()
+            PendingEditDismissDecision.CONFIRM_DISCARD -> confirmDiscard = true
+        }
+    }
+
     DatePickerDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = ::requestDismiss,
         confirmButton = {
             TextButton(onClick = {
                 val millis = state.selectedDateMillis
@@ -2011,9 +2170,18 @@ private fun DatePickerPopup(current: String?, onDismiss: () -> Unit, onSelected:
         },
         dismissButton = {
             TextButton(onClick = { onSelected(null) }) { Text("SIN LÍMITE") }
-        }
+        },
+        properties = punto25DialogProperties()
     ) { DatePicker(state = state) }
+
+    if (confirmDiscard) {
+        DiscardChangesDialog(
+            onKeepEditing = { confirmDiscard = false },
+            onDiscard = { confirmDiscard = false; onDismiss() }
+        )
+    }
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2035,7 +2203,7 @@ private fun <T> EnumDropdown(
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.menuAnchor().fillMaxWidth().padding(top = 7.dp)
         )
-        ExposedDropdownMenu(expanded, { expanded = false }) {
+        ExposedDropdownMenu(expanded, { }) {
             if (allLabel.isNotBlank()) DropdownMenuItem({ Text(allLabel) }, { onSelect(null); expanded = false })
             options.forEach { option ->
                 DropdownMenuItem({ Text(labelFor(option)) }, { onSelect(option); expanded = false })
@@ -2055,7 +2223,7 @@ private fun ZoneDropdown(c: MandadosController, label: String, current: String, 
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.menuAnchor().fillMaxWidth().padding(top = 7.dp)
         )
-        ExposedDropdownMenu(expanded, { expanded = false }) {
+        ExposedDropdownMenu(expanded, { }) {
             if (allowBlank) DropdownMenuItem({ Text("Sin zona") }, { onSelect(""); expanded = false })
             zonesForPresentation(c.config.zones).forEach { z ->
                 DropdownMenuItem({ Text(z.name) }, { onSelect(z.id); expanded = false })
@@ -2075,7 +2243,7 @@ private fun IntDropdown(label: String, value: Int, options: List<Int>, labelFor:
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier.menuAnchor().fillMaxWidth().padding(top = 7.dp)
         )
-        ExposedDropdownMenu(expanded, { expanded = false }) {
+        ExposedDropdownMenu(expanded, { }) {
             options.forEach { option -> DropdownMenuItem({ Text(labelFor(option)) }, { onSelect(option); expanded = false }) }
         }
     }
@@ -2564,7 +2732,7 @@ internal fun Punto25RatingDialog(c: MandadosController, order: LocalOrder) {
     var customTip by rememberSaveable(order.id) { mutableStateOf("") }
     val suggestions = c.config.paymentConfig.tipSuggestions
 
-    AlertDialog(
+    Punto25AlertDialog(
         onDismissRequest = {},
         title = { Text("Pedido entregado") },
         text = {

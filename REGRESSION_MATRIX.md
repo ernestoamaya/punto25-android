@@ -57,5 +57,13 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-ADMIN-001 | Las acciones/vistas administrativas no crean sesión Rider ni habilitan el workspace self-service. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ADMIN-001…` |
 
 | REG-ZONE-PRESENTATION-001 | Las zonas se ordenan sólo para presentación por categoría y nombre, ignorando mayúsculas/tildes, con estabilidad determinista y sin mutar el orden persistido. | `ZonePresentationTest` |
+| REG-DIALOG-DISMISS-001 | Las ventanas propias de Punto25 no se cierran ni ejecutan acciones por toque exterior; Atrás sigue habilitado salvo bloqueos deliberados o protección de cambios pendientes. | `DialogDismissPolicyTest.REG-DIALOG-DISMISS-001…` |
+| REG-RIDER-EDIT-DIRTY-001 | Alta de Repartidor parte limpia y cualquier cambio pendiente relevante activa dirty state. | `DialogDismissPolicyTest.REG-RIDER-EDIT-DIRTY-001…` |
+| REG-RIDER-EDIT-DIRTY-002 | Teléfono, fecha, vehículo, domicilio, límite, aprobación y documentos forman parte del dirty state de Alta/Editar Repartidor. | `DialogDismissPolicyTest.REG-RIDER-EDIT-DIRTY-002…` |
+| REG-RIDER-EDIT-DIRTY-003 | Evaluar dirty state no muta el `RiderProfile` original. | `DialogDismissPolicyTest.REG-RIDER-EDIT-DIRTY-003…` |
+| REG-RIDER-EDIT-DISCARD-001 | Atrás/CANCELAR cierran limpio y exigen confirmación cuando hay cambios pendientes; toque exterior nunca descarta. | `DialogDismissPolicyTest.REG-RIDER-EDIT-DISCARD-001…` |
+| REG-RIDER-EDIT-REVERT-001 | Revertir exactamente un cambio al estado inicial devuelve el formulario a limpio. | `DialogDismissPolicyTest.REG-RIDER-EDIT-REVERT-001…` |
+| REG-RIDER-EDIT-REVERT-002 | Revertir por completo múltiples cambios devuelve el formulario a limpio. | `DialogDismissPolicyTest.REG-RIDER-EDIT-REVERT-002…` |
+| REG-RIDER-EDIT-SAVE-001 | Guardar un Repartidor continúa persistiendo los campos/documentos normalmente; un fallo de guardado no debe cerrar el formulario. | `DialogDismissPolicyTest.REG-RIDER-EDIT-SAVE-001…` |
 
 Los nuevos bugs de Clase A deben incorporar, cuando sea técnicamente razonable, un `REG-*` y un test permanente antes de cerrar la tanda que los corrige.
