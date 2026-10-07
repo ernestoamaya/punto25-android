@@ -13,12 +13,22 @@ internal data class ShiftStoreSnapshot(
     val healthy: Boolean
 )
 
-/** Explicit v2 storage for the Alpha shift subsystem. Legacy shift keys are never read. */
+/**
+ * Explicit v2 storage for the Alpha shift subsystem. Legacy shift keys are never read.
+ *
+ * Every critical write uses commit() and a persisted revision. The process-wide lock prevents
+ * same-process interleaving; the revision prevents a stale controller/repository instance from
+ * overwriting a newer snapshot. On a stale write we fail closed and leave persistence untouched.
+ */
 internal class ShiftStoreV2(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private var observedRevision: Long = prefs.getLong(KEY_REVISION, 0L)
 
-    fun initializeIfNeeded(): ShiftStoreInitResult {
-        if (prefs.getBoolean(KEY_INITIALIZED, false)) return ShiftStoreInitResult(true, false)
+    fun initializeIfNeeded(): ShiftStoreInitResult = synchronized(PROCESS_LOCK) {
+        if (prefs.getBoolean(KEY_INITIALIZED, false)) {
+            observedRevision = prefs.getLong(KEY_REVISION, 0L)
+            return@synchronized ShiftStoreInitResult(true, false)
+        }
 
         val reconciledRiders = runCatching {
             val raw = prefs.getString(KEY_RIDERS, "[]") ?: "[]"
@@ -31,7 +41,7 @@ internal class ShiftStoreV2(context: Context) {
                     put(rider)
                 }
             }.toString()
-        }.getOrElse { return ShiftStoreInitResult(false, false) }
+        }.getOrElse { return@synchronized ShiftStoreInitResult(false, false) }
 
         val ok = prefs.edit()
             .putString(KEY_RULES, "[]")
@@ -42,46 +52,66 @@ internal class ShiftStoreV2(context: Context) {
             .remove(LEGACY_SHIFTS)
             .remove(LEGACY_RESERVATIONS)
             .remove(LEGACY_AUDIT)
+            .putLong(KEY_REVISION, 0L)
             .putBoolean(KEY_INITIALIZED, true)
             .commit()
-        return ShiftStoreInitResult(ok, ok)
+        if (ok) observedRevision = 0L
+        ShiftStoreInitResult(ok, ok)
     }
 
-    fun loadSnapshot(): ShiftStoreSnapshot = runCatching {
-        ShiftStoreSnapshot(
-            rules = decodeRules(prefs.getString(KEY_RULES, "[]") ?: "[]"),
-            shifts = decodeShifts(prefs.getString(KEY_SHIFTS, "[]") ?: "[]"),
-            reservations = decodeReservations(prefs.getString(KEY_RESERVATIONS, "[]") ?: "[]"),
-            audit = decodeAudit(prefs.getString(KEY_AUDIT, "[]") ?: "[]"),
-            healthy = true
-        )
-    }.getOrElse { ShiftStoreSnapshot(emptyList(), emptyList(), emptyList(), emptyList(), false) }
+    fun loadSnapshot(): ShiftStoreSnapshot = synchronized(PROCESS_LOCK) {
+        val snapshot = runCatching {
+            ShiftStoreSnapshot(
+                rules = decodeRules(prefs.getString(KEY_RULES, "[]") ?: "[]"),
+                shifts = decodeShifts(prefs.getString(KEY_SHIFTS, "[]") ?: "[]"),
+                reservations = decodeReservations(prefs.getString(KEY_RESERVATIONS, "[]") ?: "[]"),
+                audit = decodeAudit(prefs.getString(KEY_AUDIT, "[]") ?: "[]"),
+                healthy = true
+            )
+        }.getOrElse { ShiftStoreSnapshot(emptyList(), emptyList(), emptyList(), emptyList(), false) }
+        if (snapshot.healthy) observedRevision = prefs.getLong(KEY_REVISION, 0L)
+        snapshot
+    }
 
     fun saveRules(rules: List<ShiftGenerationRule>): Boolean =
-        prefs.edit().putString(KEY_RULES, encodeRules(rules)).commit()
+        commitRevisioned { editor -> editor.putString(KEY_RULES, encodeRules(rules)) }
 
     fun saveConcreteShifts(shifts: List<ConcreteShift>): Boolean =
-        prefs.edit().putString(KEY_SHIFTS, encodeShifts(shifts)).commit()
+        commitRevisioned { editor -> editor.putString(KEY_SHIFTS, encodeShifts(shifts)) }
 
     fun saveReservationsAndAudit(
         reservations: List<ConcreteShiftReservation>,
         audit: List<ConcreteShiftAuditEvent>
-    ): Boolean = prefs.edit()
-        .putString(KEY_RESERVATIONS, encodeReservations(reservations))
-        .putString(KEY_AUDIT, encodeAudit(audit))
-        .commit()
+    ): Boolean = commitRevisioned { editor ->
+        editor.putString(KEY_RESERVATIONS, encodeReservations(reservations))
+        editor.putString(KEY_AUDIT, encodeAudit(audit))
+    }
 
     fun saveAll(
         rules: List<ShiftGenerationRule>,
         shifts: List<ConcreteShift>,
         reservations: List<ConcreteShiftReservation>,
         audit: List<ConcreteShiftAuditEvent>
-    ): Boolean = prefs.edit()
-        .putString(KEY_RULES, encodeRules(rules))
-        .putString(KEY_SHIFTS, encodeShifts(shifts))
-        .putString(KEY_RESERVATIONS, encodeReservations(reservations))
-        .putString(KEY_AUDIT, encodeAudit(audit))
-        .commit()
+    ): Boolean = commitRevisioned { editor ->
+        editor.putString(KEY_RULES, encodeRules(rules))
+        editor.putString(KEY_SHIFTS, encodeShifts(shifts))
+        editor.putString(KEY_RESERVATIONS, encodeReservations(reservations))
+        editor.putString(KEY_AUDIT, encodeAudit(audit))
+    }
+
+    private inline fun commitRevisioned(
+        crossinline changes: (android.content.SharedPreferences.Editor) -> android.content.SharedPreferences.Editor
+    ): Boolean = synchronized(PROCESS_LOCK) {
+        runCatching {
+            val persistedRevision = prefs.getLong(KEY_REVISION, 0L)
+            if (persistedRevision != observedRevision) return@synchronized false
+            val nextRevision = persistedRevision + 1L
+            val editor = changes(prefs.edit()).putLong(KEY_REVISION, nextRevision)
+            val committed = editor.commit()
+            if (committed) observedRevision = nextRevision
+            committed
+        }.getOrDefault(false)
+    }
 
     private fun encodeRules(items: List<ShiftGenerationRule>) = JSONArray().apply {
         items.forEach { rule ->
@@ -229,8 +259,11 @@ internal class ShiftStoreV2(context: Context) {
         if (!has(key) || isNull(key)) null else optString(key, null)?.takeIf { it.isNotBlank() }
 
     companion object {
+        private val PROCESS_LOCK = Any()
+
         private const val PREFS_NAME = "mandados_alpha1"
         private const val KEY_INITIALIZED = "shift_v2_initialized"
+        private const val KEY_REVISION = "shift_v2_revision"
         private const val KEY_RULES = "shift_generation_rules_v2"
         private const val KEY_SHIFTS = "concrete_shifts_v2"
         private const val KEY_RESERVATIONS = "concrete_shift_reservations_v2"
