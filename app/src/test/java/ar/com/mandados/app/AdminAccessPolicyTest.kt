@@ -10,9 +10,9 @@ import org.junit.Test
 class AdminAccessPolicyTest {
     @Test
     fun `REG-ADMIN-AUTH-001 no existe ALPHA_ADMIN_PIN como credencial operativa`() {
-        val gradle = projectSource("build.gradle.kts")
-        val app = projectSource("src/main/java/ar/com/mandados/app/MandadosApp.kt")
-        val auth = projectSource("src/main/java/ar/com/mandados/app/AuthIntegration.kt")
+        val gradle = projectFile("app/build.gradle.kts")
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val auth = projectFile("app/src/main/java/ar/com/mandados/app/AuthIntegration.kt")
 
         assertFalse(gradle.contains("ALPHA_ADMIN_PIN"))
         assertFalse(app.contains("ALPHA_ADMIN_PIN"))
@@ -21,8 +21,8 @@ class AdminAccessPolicyTest {
 
     @Test
     fun `REG-ADMIN-ANDROID-001 acceso Admin no compara PIN local`() {
-        val app = projectSource("src/main/java/ar/com/mandados/app/MandadosApp.kt")
-        val auth = projectSource("src/main/java/ar/com/mandados/app/AuthIntegration.kt")
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val auth = projectFile("app/src/main/java/ar/com/mandados/app/AuthIntegration.kt")
 
         assertFalse(app.contains("PIN Alpha"))
         assertFalse(app.contains("expectedPin"))
@@ -102,7 +102,7 @@ class AdminAccessPolicyTest {
         session.clear()
         assertFalse(session.authorized)
 
-        val app = projectSource("src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
         assertTrue(app.contains("onBack = {\n                adminSession.clear()\n                screen = Screen.HOME"))
         assertTrue(app.contains("onLogout = {\n                adminSession.clear()"))
     }
@@ -115,20 +115,20 @@ class AdminAccessPolicyTest {
         assertTrue(previousProcess.authorized)
         assertFalse(recreatedProcess.authorized)
 
-        val app = projectSource("src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
         assertTrue(app.contains("val adminSession = remember { AdminAccessSession() }"))
         assertFalse(app.contains("rememberSaveable { AdminAccessSession()"))
         assertTrue(app.contains("requiresAdminReauthorization"))
         assertTrue(app.contains("!GoogleAuthIntegration.hasCurrentUser(context)"))
     }
 
-    private fun projectSource(relativePath: String): String {
+    private fun projectFile(repoRelativePath: String): String {
         val candidates = listOf(
-            File(relativePath),
-            File("app/$relativePath"),
-            File("../app/$relativePath")
+            File(repoRelativePath),
+            File("../$repoRelativePath"),
+            File("../../$repoRelativePath")
         )
         return candidates.firstOrNull { it.isFile }?.readText()
-            ?: error("No se encontró source de regresión: $relativePath")
+            ?: error("No se encontró source de regresión: $repoRelativePath")
     }
 }
