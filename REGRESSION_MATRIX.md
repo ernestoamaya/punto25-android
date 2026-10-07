@@ -26,7 +26,7 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-PAY-TIP-015 | El balance usa una única regla y sólo suma propinas de transferencia confirmadas. | `TipTransferPolicyTest.REG-PAY-TIP-015…` |
 | REG-PAY-TIP-016 | La identidad autenticada del Repartidor debe coincidir con el actor que opera la propina; conocer otro RID no autoriza. | `TipTransferPolicyTest.REG-PAY-TIP-016…` |
 | REG-PAY-TIP-017 | Fixture integral realista con propina por transferencia de $100 llega a `TRANSFER_DECLARED` y produce exactamente una propina pendiente para el Rider autenticado asignado. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-017…` |
-| REG-PAY-TIP-018 | Confirmar la propina de $100 la deja `CONFIRMED`, la quita de pendientes, queda visible en el dato histórico y suma exactamente $100 al balance. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-018…` |
+| REG-PAY-TIP-018 | Confirmar la propina de $100 la deja `TRANSFER_DECLARED`, la quita de pendientes, queda visible en el dato histórico y suma exactamente $100 al balance. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-018…` |
 | REG-PAY-TIP-019 | Persistencia/reinicio + nueva autenticación conserva la propina `CONFIRMED`, su importe, balance y único evento. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-019…` |
 | REG-PAY-TIP-020 | Una segunda confirmación es idempotente: no duplica saldo, no duplica `TIP_TRANSFER_CONFIRMED` ni produce efectos financieros repetidos. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-020…` |
 | REG-PAY-TIP-021 | Rider B no ve, no puede confirmar ni altera la propina de Rider A. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-021…` |
@@ -89,6 +89,21 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-DENIAL-001 | Las denegaciones de nuevo trabajo exponen un motivo tipado utilizable por UI, incluyendo documentación. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-DENIAL-001…` |
 | REG-RIDER-DENIAL-002 | Los wrappers usados por UI publican el motivo tipado y éste se transforma en un mensaje entendible, no en no-op silencioso. | `RiderEligibilityBoundaryRegressionTest.REG-RIDER-DENIAL-002…` |
 | REG-RIDER-ADMIN-001 | Las acciones/vistas administrativas no crean sesión Rider ni habilitan el workspace self-service. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ADMIN-001…` |
+| REG-ADMIN-AUTH-001 | Android/config de build no contiene `ALPHA_ADMIN_PIN` como credencial operativa. | `AdminAccessPolicyTest.REG-ADMIN-AUTH-001…` |
+| REG-ADMIN-AUTH-002 | Un request Admin sin Firebase token válido falla cerrado con 401. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-002…` |
+| REG-ADMIN-AUTH-003 | Un Firebase UID autenticado ausente de `admin_users` recibe 403. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-003…` |
+| REG-ADMIN-AUTH-004 | Un Firebase UID Admin habilitado recibe autorización. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-004…` |
+| REG-ADMIN-AUTH-005 | Un Firebase UID Admin deshabilitado recibe 403. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-005…` |
+| REG-ADMIN-AUTH-006 | Config/D1 ausente o fallando nunca autoriza Administración. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-006…` |
+| REG-ADMIN-AUTH-007 | El UID de autorización proviene del usuario Firebase verificado y no puede reemplazarse por parámetros/cabeceras. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-007…` |
+| REG-ADMIN-AUTH-008 | Todas las respuestas del gate Admin usan `Cache-Control: no-store`. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-008…` |
+| REG-ADMIN-ANDROID-001 | Android no compara PIN local ni referencia `BuildConfig.ALPHA_ADMIN_PIN`; usa el gate backend con Firebase ID Token. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-001…` |
+| REG-ADMIN-ANDROID-002 | Sin sesión Firebase el acceso Admin se deniega antes de llamar al backend. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-002…` |
+| REG-ADMIN-ANDROID-003 | Backend 403 no concede la sesión Admin transitoria. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-003…` |
+| REG-ADMIN-ANDROID-004 | Error de backend/red falla cerrado y no concede navegación Admin. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-004…` |
+| REG-ADMIN-ANDROID-005 | Sólo `200` con `authorized=true` concede la sesión Admin transitoria. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-005…` |
+| REG-ADMIN-ANDROID-006 | Salir del área Admin o cerrar sesión invalida la autorización transitoria. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-006…` |
+| REG-ADMIN-ANDROID-007 | Un proceso recreado no conserva autorización Admin y obliga a pasar nuevamente por el gate backend. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-007…` |
 
 | REG-ZONE-PRESENTATION-001 | Las zonas se ordenan sólo para presentación por categoría y nombre, ignorando mayúsculas/tildes, con estabilidad determinista y sin mutar el orden persistido. | `ZonePresentationTest` |
 | REG-DIALOG-DISMISS-001 | Las ventanas propias de Punto25 no se cierran ni ejecutan acciones por toque exterior; Atrás sigue habilitado salvo bloqueos deliberados o protección de cambios pendientes. | `DialogDismissPolicyTest.REG-DIALOG-DISMISS-001…` |
