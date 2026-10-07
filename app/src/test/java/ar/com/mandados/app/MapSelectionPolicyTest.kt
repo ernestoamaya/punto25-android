@@ -93,26 +93,33 @@ class MapSelectionPolicyTest {
     @Test
     fun `REG-MAPS-OSS-001 MapLibre OpenFreeMap reemplaza Google Maps operativo`() {
         val gradle = projectFile("app/build.gradle.kts")
-        val manifest = projectFile("app/src/main/AndroidManifest.xml")
-        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
-        val picker = projectFile("app/src/main/java/ar/com/mandados/app/MapLocationPicker.kt")
+        val operational = buildString {
+            append(projectTextTree("app/src/main"))
+            append('\n').append(gradle)
+            append('\n').append(projectFile(".github/workflows/alpha-apk.yml"))
+        }
+        val forbidden = listOf(
+            "com.google.maps.android",
+            "com.google.android.gms.maps",
+            "maps-compose",
+            "com.google.android.geo.API_KEY",
+            "MAPS_API_KEY"
+        )
 
-        assertTrue(gradle.contains("org.maplibre.compose:maplibre-compose:0.19.0"))
-        assertTrue(gradle.contains("org.maplibre.compose:maplibre-compose-runtime-opengl-android:0.19.0"))
-        assertTrue(gradle.contains("com.google.android.gms:play-services-location:21.4.0"))
-        assertFalse(gradle.contains("com.google.maps.android:maps-compose"))
-        assertFalse(manifest.contains("com.google.android.geo.API_KEY"))
-        assertFalse(manifest.contains("MAPS_API_KEY"))
-        assertTrue(picker.contains("https://tiles.openfreemap.org/styles/liberty"))
-        assertTrue(picker.contains("MaplibreMap("))
-        assertFalse(app.contains("com.google.maps"))
-        assertFalse(picker.contains("com.google.maps"))
+        forbidden.forEach { token -> assertFalse("Referencia operativa prohibida: $token", operational.contains(token)) }
+        assertTrue(gradle.contains("implementation(\"org.maplibre.compose:maplibre-compose:0.19.0\")"))
+        assertTrue(gradle.contains("runtimeOnly(\"org.maplibre.compose:maplibre-compose-runtime-opengl-android:0.19.0\")"))
+        assertTrue(gradle.contains("implementation(\"com.google.android.gms:play-services-location:21.4.0\")"))
+        assertFalse(gradle.contains("org.maplibre.compose:maplibre-compose:+"))
+        assertFalse(gradle.contains("org.maplibre.compose:maplibre-compose:0.19.0-SNAPSHOT"))
     }
 
     @Test
     fun `REG-MAPS-SELECTION-001 selector usa callback geografico de MapInteractions`() {
         val picker = projectFile("app/src/main/java/ar/com/mandados/app/MapLocationPicker.kt")
 
+        assertTrue(picker.contains("https://tiles.openfreemap.org/styles/liberty"))
+        assertTrue(picker.contains("MaplibreMap("))
         assertTrue(picker.contains("MapInteractions"))
         assertTrue(picker.contains("callbacks {"))
         assertTrue(picker.contains("click {"))
@@ -141,10 +148,21 @@ class MapSelectionPolicyTest {
     }
 
     @Test
-    fun `REG-PACKAGING-MAPS-001 packaging no requiere clave cartografica`() {
+    fun `REG-PACKAGING-MAPS-001 packaging no requiere clave cartografica y conserva protecciones`() {
         val workflow = projectFile(".github/workflows/alpha-apk.yml")
 
         assertFalse(workflow.contains("MAPS_API_KEY"))
+        assertTrue(workflow.contains("permissions:\n  contents: read"))
+        assertTrue(workflow.contains("cancel-in-progress: false"))
+        assertTrue(workflow.contains("persist-credentials: false"))
+        assertTrue(workflow.contains("TRUSTED_MAIN_SHA"))
+        assertTrue(workflow.contains("SAFE_RELEASE_FLOOR_SHA"))
+        assertTrue(workflow.contains("git checkout --detach --force \"$TARGET_SHA\""))
+        assertTrue(workflow.contains("SIGNER_COUNT"))
+        assertTrue(workflow.contains("EXPECTED_ALPHA_CERT_SHA256"))
+        assertTrue(workflow.contains("SHA256SUMS.txt"))
+        assertTrue(workflow.contains("BUILD_PROVENANCE.txt"))
+        assertTrue(workflow.contains("ARTIFACT_NAME"))
         assertTrue(workflow.contains("FIREBASE_API_KEY"))
         assertTrue(workflow.contains("ALPHA_KEYSTORE_B64"))
     }
@@ -164,5 +182,19 @@ class MapSelectionPolicyTest {
         )
         return candidates.firstOrNull { it.isFile }?.readText()
             ?: error("No se encontró source de regresión: $repoRelativePath")
+    }
+
+    private fun projectTextTree(repoRelativePath: String): String {
+        val root = listOf(
+            File(repoRelativePath),
+            File("../$repoRelativePath"),
+            File("../../$repoRelativePath")
+        ).firstOrNull { it.isDirectory }
+            ?: error("No se encontró árbol de regresión: $repoRelativePath")
+        val textExtensions = setOf("kt", "kts", "xml", "properties", "json", "txt")
+        return root.walkTopDown()
+            .filter { it.isFile && it.extension.lowercase() in textExtensions }
+            .sortedBy { it.path }
+            .joinToString("\n") { it.readText() }
     }
 }
