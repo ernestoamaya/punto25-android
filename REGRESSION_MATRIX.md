@@ -26,7 +26,7 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-PAY-TIP-015 | El balance usa una única regla y sólo suma propinas de transferencia confirmadas. | `TipTransferPolicyTest.REG-PAY-TIP-015…` |
 | REG-PAY-TIP-016 | La identidad autenticada del Repartidor debe coincidir con el actor que opera la propina; conocer otro RID no autoriza. | `TipTransferPolicyTest.REG-PAY-TIP-016…` |
 | REG-PAY-TIP-017 | Fixture integral realista con propina por transferencia de $100 llega a `TRANSFER_DECLARED` y produce exactamente una propina pendiente para el Rider autenticado asignado. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-017…` |
-| REG-PAY-TIP-018 | Confirmar la propina de $100 la deja `TRANSFER_DECLARED`, la quita de pendientes, queda visible en el dato histórico y suma exactamente $100 al balance. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-018…` |
+| REG-PAY-TIP-018 | Confirmar la propina de $100 la deja `CONFIRMED`, la quita de pendientes, queda visible en el dato histórico y suma exactamente $100 al balance. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-018…` |
 | REG-PAY-TIP-019 | Persistencia/reinicio + nueva autenticación conserva la propina `CONFIRMED`, su importe, balance y único evento. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-019…` |
 | REG-PAY-TIP-020 | Una segunda confirmación es idempotente: no duplica saldo, no duplica `TIP_TRANSFER_CONFIRMED` ni produce efectos financieros repetidos. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-020…` |
 | REG-PAY-TIP-021 | Rider B no ve, no puede confirmar ni altera la propina de Rider A. | `RiderSessionAndTipIntegrationTest.REG-PAY-TIP-021…` |
