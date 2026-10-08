@@ -154,6 +154,54 @@ class OrderZoneOverrideCommittedPaymentTest {
         assertEquals(beforeOverride, restarted.order(overridden.id)!!.zoneOverrides[OrderZonePoint.DESTINATION])
     }
 
+    @Test
+    fun `REG-ZONE-OVERRIDE-PAYMENT-001 missing payment fails closed without implicit reconciliation`() {
+        val cfg = testConfig()
+        val original = orderFromDraft("PAY-MISSING", deliveryDraft("a", "a"), cfg)
+        val store = LocalStore(context)
+        store.saveConfig(cfg)
+        store.saveOrdersAndPayments(listOf(original), emptyList())
+        val c = MandadosController(context)
+
+        val beforeOrder = c.order(original.id)!!
+        val beforeOrders = c.orders
+        val beforeEvents = beforeOrder.events
+        assertTrue(c.payments.isEmpty())
+        assertTrue(c.paymentForOrder(original.id) == null)
+
+        val preview = c.previewOrderZoneOverride(
+            original.id,
+            OrderZonePoint.DESTINATION,
+            OrderZoneOverrideSelection.Catalog("b")
+        )!!
+        assertFalse(preview.allowed)
+
+        assertFalse(
+            c.applyOrderZoneOverride(
+                original.id,
+                OrderZonePoint.DESTINATION,
+                OrderZoneOverrideSelection.Catalog("b"),
+                "No debe crear un pago implícitamente"
+            )
+        )
+
+        assertEquals(beforeOrder, c.order(original.id))
+        assertEquals(beforeOrders, c.orders)
+        assertEquals(beforeEvents, c.order(original.id)!!.events)
+        assertTrue(c.order(original.id)!!.zoneOverrides.isEmpty())
+        assertTrue(c.payments.isEmpty())
+        assertTrue(c.paymentForOrder(original.id) == null)
+        assertEquals(beforeOrders, LocalStore(context).loadOrders())
+        assertTrue(LocalStore(context).loadPayments().isEmpty())
+
+        val restarted = MandadosController(context)
+        assertEquals(beforeOrder, restarted.order(original.id))
+        assertEquals(beforeEvents, restarted.order(original.id)!!.events)
+        assertTrue(restarted.order(original.id)!!.zoneOverrides.isEmpty())
+        assertTrue(restarted.payments.isEmpty())
+        assertTrue(restarted.paymentForOrder(original.id) == null)
+    }
+
     private fun testConfig(): AdminConfig = AdminConfig(
         operationMode = OperationMode.MULTI_RIDER,
         zones = listOf(
