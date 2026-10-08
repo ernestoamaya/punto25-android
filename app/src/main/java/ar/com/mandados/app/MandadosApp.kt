@@ -124,6 +124,7 @@ private fun MandadosNavigation(controller: MandadosController) {
     var selectedRiderId by rememberSaveable { mutableStateOf<String?>(null) }
     var mapTarget by rememberSaveable { mutableStateOf<MapTarget?>(null) }
     var lastRootBackAt by rememberSaveable { mutableStateOf(0L) }
+    var adminLoginReturnScreen by rememberSaveable { mutableStateOf(Screen.HOME) }
     val adminSession = remember { AdminAccessSession() }
     val protectedAdminScreens = remember {
         setOf(
@@ -156,7 +157,8 @@ private fun MandadosNavigation(controller: MandadosController) {
         if (screen == Screen.ADMIN || screen == Screen.ADMIN_LOGIN) adminSession.clear()
         screen = when (screen) {
             Screen.WHATSAPP_VERIFY, Screen.RIDER_ACCESS -> Screen.REGISTER
-            Screen.DELIVERY, Screen.SHOPPING, Screen.HISTORY, Screen.CUSTOMER_PROFILE, Screen.CUSTOMER_SUPPORT, Screen.ADMIN_LOGIN -> Screen.HOME
+            Screen.DELIVERY, Screen.SHOPPING, Screen.HISTORY, Screen.CUSTOMER_PROFILE, Screen.CUSTOMER_SUPPORT -> Screen.HOME
+            Screen.ADMIN_LOGIN -> adminLoginReturnScreen
             Screen.REVIEW -> if (controller.draft.serviceType == ServiceType.DELIVERY) Screen.DELIVERY else Screen.SHOPPING
             Screen.SUBMITTED -> Screen.HOME
             Screen.ORDER_DETAIL -> Screen.HISTORY
@@ -213,7 +215,12 @@ private fun MandadosNavigation(controller: MandadosController) {
         Screen.REGISTER -> RegisterScreen(
             controller,
             onContinue = { screen = Screen.WHATSAPP_VERIFY },
-            onRider = { screen = Screen.RIDER_ACCESS }
+            onRider = { screen = Screen.RIDER_ACCESS },
+            onAdmin = {
+                adminSession.clear()
+                adminLoginReturnScreen = Screen.REGISTER
+                screen = Screen.ADMIN_LOGIN
+            }
         )
         Screen.WHATSAPP_VERIFY -> WhatsAppVerificationScreen(
             controller,
@@ -241,6 +248,7 @@ private fun MandadosNavigation(controller: MandadosController) {
             onSupport = { screen = Screen.CUSTOMER_SUPPORT },
             onAdmin = {
                 adminSession.clear()
+                adminLoginReturnScreen = Screen.HOME
                 screen = Screen.ADMIN_LOGIN
             },
             onLogout = {
@@ -288,7 +296,7 @@ private fun MandadosNavigation(controller: MandadosController) {
         Screen.ADMIN_LOGIN -> AdminLoginScreen(
             onBack = {
                 adminSession.clear()
-                screen = Screen.HOME
+                screen = adminLoginReturnScreen
             },
             onSuccess = {
                 adminSession.apply(AdminAccessResult.AUTHORIZED)
@@ -431,7 +439,7 @@ internal fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composa
 }
 
 @Composable
-private fun RegisterScreen(c: MandadosController, onContinue: () -> Unit, onRider: () -> Unit) {
+private fun RegisterScreen(c: MandadosController, onContinue: () -> Unit, onRider: () -> Unit, onAdmin: () -> Unit) {
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
@@ -613,6 +621,9 @@ private fun RegisterScreen(c: MandadosController, onContinue: () -> Unit, onRide
             }
             TextButton(onClick = onRider, modifier = Modifier.padding(top = 8.dp)) {
                 Text("SOY REPARTIDOR", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+            TextButton(onClick = onAdmin) {
+                Text("ADMINISTRACIÓN", color = Color.White, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(24.dp))
         }
