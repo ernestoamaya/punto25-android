@@ -91,3 +91,14 @@ fun authenticatedRiderActiveOrders(controller: MandadosController, riderId: Stri
             it.status in setOf(OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.IN_PROGRESS)
     }
 }
+
+internal fun authenticatedRiderNavigationDestinations(
+    controller: MandadosController,
+    riderId: String,
+    orderId: String
+): List<RiderOrderNavigationDestination> {
+    if (!controller.hasAuthenticatedRiderSession(riderId)) return emptyList()
+    val order = controller.order(orderId) ?: return emptyList()
+    if (order.assignedRiderId != riderId) return emptyList()
+    return riderOrderNavigationDestinations(order)
+}

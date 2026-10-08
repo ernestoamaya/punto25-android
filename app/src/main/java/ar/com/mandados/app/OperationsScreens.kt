@@ -931,13 +931,34 @@ private fun RiderNewOrders(c: MandadosController, rider: RiderProfile) {
 @Composable
 private fun RiderActiveOrders(c: MandadosController, rider: RiderProfile) {
     val context = LocalContext.current
-    val orders = c.orders.filter {
-        it.assignedRiderId == rider.id && it.status in setOf(OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.IN_PROGRESS)
-    }.sortedByDescending { parseOrderTime(it.createdAt) ?: LocalDateTime.MIN }
+    val orders = authenticatedRiderActiveOrders(c, rider.id)
+        .sortedByDescending { parseOrderTime(it.createdAt) ?: LocalDateTime.MIN }
 
     if (orders.isEmpty()) AssistCard("No tenés pedidos activos.")
     orders.forEach { order ->
         RiderOrderCard(c, order) {
+            val navigationDestinations = authenticatedRiderNavigationDestinations(c, rider.id, order.id)
+            if (navigationDestinations.isNotEmpty()) {
+                SectionTitle("Navegación")
+                navigationDestinations.forEach { destination ->
+                    OutlinedButton(
+                        onClick = {
+                            val result = launchRiderNavigation(riderNavigationIntent(destination)) { intent ->
+                                context.startActivity(intent)
+                            }
+                            if (result == RiderNavigationLaunchResult.NO_HANDLER) {
+                                Toast.makeText(
+                                    context,
+                                    "No hay una aplicación de mapas compatible instalada.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                    ) { Text(destination.type.buttonLabel) }
+                }
+            }
+
             SectionTitle("Contacto con el cliente")
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedButton(onClick = { dial(context, order.customerPhone) }, modifier = Modifier.weight(1f)) { Text("LLAMAR") }
