@@ -34,6 +34,7 @@ android {
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", quoted(configValue("GOOGLE_WEB_CLIENT_ID")))
         buildConfigField("String", "PUNTO25_API_BASE_URL", quoted(configValue("PUNTO25_API_BASE_URL")))
         buildConfigField("String", "WHATSAPP_VERIFY_NUMBER", quoted(configValue("WHATSAPP_VERIFY_NUMBER")))
+        buildConfigField("boolean", "WHATSAPP_VERIFICATION_ENABLED", (configValue("WHATSAPP_VERIFICATION_ENABLED").equals("true", ignoreCase = true)).toString())
     }
 
     signingConfigs {
