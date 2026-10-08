@@ -78,7 +78,7 @@ internal class UnsavedChangesGuardState {
 
     internal fun requestExit(dirty: Boolean, exit: () -> Unit) {
         if (dirty) {
-            pendingExit = exit
+            if (pendingExit == null) pendingExit = exit
         } else {
             exit()
         }
