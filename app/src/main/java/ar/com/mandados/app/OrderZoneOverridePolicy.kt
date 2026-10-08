@@ -136,15 +136,15 @@ private fun declaredZoneLabel(zoneId: String, config: AdminConfig): String = whe
     zoneId.isBlank() -> "Sin zona declarada"
     zoneId == UNKNOWN_ZONE_ID -> "A confirmar"
     else -> config.zones.firstOrNull { it.id == zoneId }?.let { zone ->
-        "${zone.name} · $${zone.price} · id=${zone.id}"
+        "${zone.name} · \$${zone.price} · id=${zone.id}"
     } ?: "Zona no disponible · id=$zoneId"
 }
 
 private fun overrideLabel(override: OrderZoneOverride): String = when (override.source) {
     OrderZoneOverrideSource.CATALOG ->
-        "${override.name} · $${override.price} · CATALOG · id=${override.catalogZoneId.orEmpty()}"
+        "${override.name} · \$${override.price} · CATALOG · id=${override.catalogZoneId.orEmpty()}"
     OrderZoneOverrideSource.AD_HOC ->
-        "${override.name} · $${override.price} · AD_HOC"
+        "${override.name} · \$${override.price} · AD_HOC"
 }
 
 private fun pricingPoints(
