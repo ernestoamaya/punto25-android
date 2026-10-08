@@ -508,7 +508,7 @@ class MandadosController(context: Context) {
         notes = order.notes
     )
 
-    fun previewOrderZoneOverride(
+    internal fun previewOrderZoneOverride(
         orderId: String,
         point: OrderZonePoint,
         selection: OrderZoneOverrideSelection
@@ -523,7 +523,7 @@ class MandadosController(context: Context) {
         )
     }
 
-    fun applyOrderZoneOverride(
+    internal fun applyOrderZoneOverride(
         orderId: String,
         point: OrderZonePoint,
         selection: OrderZoneOverrideSelection,
