@@ -89,7 +89,8 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-DENIAL-001 | Las denegaciones de nuevo trabajo exponen un motivo tipado utilizable por UI, incluyendo documentación. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-DENIAL-001…` |
 | REG-RIDER-DENIAL-002 | Los wrappers usados por UI publican el motivo tipado y éste se transforma en un mensaje entendible, no en no-op silencioso. | `RiderEligibilityBoundaryRegressionTest.REG-RIDER-DENIAL-002…` |
 | REG-RIDER-ADMIN-001 | Las acciones/vistas administrativas no crean sesión Rider ni habilitan el workspace self-service. | `RiderEligibilityAndSessionIntegrationTest.REG-RIDER-ADMIN-001…` |
-| REG-ADMIN-AUTH-001 | Android/config de build no contiene `ALPHA_ADMIN_PIN` como credencial operativa. | `AdminAccessPolicyTest.REG-ADMIN-AUTH-001…` |
+| REG-ADMIN-ENTRY-001 | Desde REGISTER existe una entrada explícita a ADMIN_LOGIN y Atrás retorna al origen, sin acceso directo a ADMIN. | `AdminAccessPolicyTest.REG-ADMIN-ENTRY-001…` |
+| REG-ADMIN-AUTH-001 | Android/config de build no contiene `ALPHA_ADMIN_PIN` ni bypass/credencial Admin alternativa; las entradas UI sólo alcanzan ADMIN_LOGIN. | `AdminAccessPolicyTest.REG-ADMIN-AUTH-001…` |
 | REG-ADMIN-AUTH-002 | Un request Admin sin Firebase token válido falla cerrado con 401. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-002…` |
 | REG-ADMIN-AUTH-003 | Un Firebase UID autenticado ausente de `admin_users` recibe 403. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-003…` |
 | REG-ADMIN-AUTH-004 | Un Firebase UID Admin habilitado recibe autorización. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-004…` |
