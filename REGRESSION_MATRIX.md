@@ -145,6 +145,18 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-MAPS-LOCATION-PERMISSION-001 | Denegar ubicación física no bloquea la selección manual ni la confirmación de un pin. | `MapSelectionPolicyTest.REG-MAPS-LOCATION-PERMISSION-001…` |
 | REG-MAPS-ATTRIBUTION-001 | El mapa conserva el overlay predeterminado de atribución de MapLibre para las fuentes cartográficas. | `MapSelectionPolicyTest.REG-MAPS-ATTRIBUTION-001…` |
 | REG-PACKAGING-MAPS-001 | El packaging Alpha no lee, exige ni propaga `MAPS_API_KEY`; las protecciones de packaging restantes permanecen. | `MapSelectionPolicyTest.REG-PACKAGING-MAPS-001…` |
+| REG-ORDER-LOCATION-PRESENTATION-001 | Cliente no muestra Pin/URLs legacy; usa presentación estructurada. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-PRESENTATION-001…` |
+| REG-ORDER-LOCATION-PRESENTATION-002 | Rider no muestra Pin/URLs legacy; usa presentación estructurada. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-PRESENTATION-002…` |
+| REG-ORDER-LOCATION-PRESENTATION-003 | Admin no muestra Pin/URLs/coordenadas técnicas; usa presentación estructurada. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-PRESENTATION-003…` |
+| REG-ORDER-LOCATION-STRUCTURED-001 | Visor usa sólo GeoPoint estructurados según tipo de servicio; nunca detail/URL/texto/dirección. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-STRUCTURED-001…` |
+| REG-ORDER-LOCATION-READONLY-001 | Visor interno no pide ubicación/permisos ni muta pedido/draft/zona/estado. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-READONLY-001…` |
+| REG-ORDER-LOCATION-POINTS-001 | DELIVERY muestra sólo GeoPoints existentes de retiro/entrega. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-POINTS-001…` |
+| REG-ORDER-LOCATION-POINTS-002 | SHOPPING muestra sólo GeoPoints existentes de retiro previo/comercio/entrega. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-POINTS-002…` |
+| REG-ORDER-LOCATION-LEGACY-001 | URL legacy sin GeoPoint no genera ubicación ficticia. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-LEGACY-001…` |
+| REG-ORDER-LOCATION-CLIENT-AUTH-001 | GeoPoints no alteran aislamiento Cliente; pedido ajeno sigue inaccesible. | `CustomerOrderOwnershipTest.REG-ORDER-LOCATION-CLIENT-AUTH-001…` |
+| REG-ORDER-LOCATION-RIDER-AUTH-001 | Sólo Rider autenticado asignado al pedido obtiene ubicaciones. | `RiderOrderLocationAuthorizationTest.REG-ORDER-LOCATION-RIDER-AUTH-001…` |
+| REG-ORDER-LOCATION-MAP-001 | GeoPoint→MapLibre conserva longitude/latitude sin inversión. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-MAP-001…` |
+| REG-ORDER-LOCATION-NOMUTATION-001 | Consultar/abrir visor no muta LocalOrder. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-NOMUTATION-001…` |
 
 | REG-ZONE-PRESENTATION-001 | Las zonas se ordenan sólo para presentación por categoría y nombre, ignorando mayúsculas/tildes, con estabilidad determinista y sin mutar el orden persistido. | `ZonePresentationTest` |
 | REG-DIALOG-DISMISS-001 | Las ventanas propias de Punto25 no se cierran ni ejecutan acciones por toque exterior; Atrás sigue habilitado salvo bloqueos deliberados o protección de cambios pendientes. | `DialogDismissPolicyTest.REG-DIALOG-DISMISS-001…` |

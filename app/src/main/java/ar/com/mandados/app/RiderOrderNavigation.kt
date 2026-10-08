@@ -21,23 +21,18 @@ internal enum class RiderNavigationLaunchResult {
     NO_HANDLER
 }
 
-internal fun riderOrderNavigationDestinations(order: LocalOrder): List<RiderOrderNavigationDestination> = buildList {
-    fun addIfNavigable(type: RiderOrderNavigationPoint, point: GeoPoint?) {
-        if (point != null && point.isNavigable()) add(RiderOrderNavigationDestination(type, point))
+internal fun riderOrderNavigationDestinations(order: LocalOrder): List<RiderOrderNavigationDestination> =
+    orderLocationPoints(order).map { location ->
+        RiderOrderNavigationDestination(
+            type = when (location.kind) {
+                OrderLocationKind.ORIGIN -> RiderOrderNavigationPoint.ORIGIN
+                OrderLocationKind.PRE_PICKUP -> RiderOrderNavigationPoint.PRE_PICKUP
+                OrderLocationKind.STORE -> RiderOrderNavigationPoint.STORE
+                OrderLocationKind.DESTINATION -> RiderOrderNavigationPoint.DESTINATION
+            },
+            point = location.point
+        )
     }
-
-    when (order.serviceType) {
-        ServiceType.DELIVERY -> {
-            addIfNavigable(RiderOrderNavigationPoint.ORIGIN, order.originLocation)
-            addIfNavigable(RiderOrderNavigationPoint.DESTINATION, order.destinationLocation)
-        }
-        ServiceType.SHOPPING -> {
-            addIfNavigable(RiderOrderNavigationPoint.PRE_PICKUP, order.prePickupLocation)
-            addIfNavigable(RiderOrderNavigationPoint.STORE, order.storeLocation)
-            addIfNavigable(RiderOrderNavigationPoint.DESTINATION, order.destinationLocation)
-        }
-    }
-}
 
 internal fun riderNavigationUri(point: GeoPoint): Uri {
     val latitude = java.lang.Double.toString(point.latitude)
@@ -57,7 +52,3 @@ internal fun launchRiderNavigation(
 } catch (_: ActivityNotFoundException) {
     RiderNavigationLaunchResult.NO_HANDLER
 }
-
-private fun GeoPoint.isNavigable(): Boolean =
-    latitude.isFinite() && longitude.isFinite() &&
-        latitude in -90.0..90.0 && longitude in -180.0..180.0

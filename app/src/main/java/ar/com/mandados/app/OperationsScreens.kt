@@ -204,7 +204,7 @@ internal fun AdminOrderDetailV2Screen(c: MandadosController, id: String?, onBack
 
         Spacer(Modifier.height(14.dp))
         SectionTitle("Detalle")
-        Card(Modifier.fillMaxWidth()) { Text(order.detail, Modifier.padding(12.dp)) }
+        AdminStructuredOrderPresentation(c, order)
 
         c.deliveryDurationSeconds(order)?.let {
             Spacer(Modifier.height(10.dp))
@@ -1187,7 +1187,7 @@ private fun RiderTransfers(c: MandadosController, rider: RiderProfile) {
     }
 
     items.forEach { payment ->
-        val order = c.order(payment.orderId) ?: return@forEach
+        val order = authenticatedAssignedRiderOrder(c, rider.id, payment.orderId) ?: return@forEach
         var expanded by rememberSaveable(payment.id) { mutableStateOf(false) }
         Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
   Column(Modifier.padding(12.dp)) {
@@ -1202,7 +1202,7 @@ private fun RiderTransfers(c: MandadosController, rider: RiderProfile) {
           modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
       ) { Text(if (expanded) "OCULTAR DETALLE" else "VER DETALLE DEL PEDIDO") }
       if (expanded) {
-          Text(order.detail, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+          StructuredOrderPresentation(c, order, Modifier.padding(top = 6.dp))
           PaymentSummary(c, order, rider = rider)
       }
   }
@@ -2280,7 +2280,7 @@ private fun RiderOrderCard(c: MandadosController, order: LocalOrder, actions: @C
             }
             Text(order.createdAt)
             Text(categoryText(order.category), color = MaterialTheme.colorScheme.primary)
-            Text(order.detail)
+            RiderStructuredOrderPresentation(c, order)
             c.deliveryDurationSeconds(order)?.let { ReportMetric("Tiempo", formatDuration(it)) }
             Spacer(Modifier.height(8.dp))
             actions()

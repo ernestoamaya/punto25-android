@@ -85,4 +85,21 @@ class CustomerOrderOwnershipTest {
     fun blankLegacyIdentityNeverMatches() {
         assertFalse(orderBelongsToCustomer(order(""), customer()))
     }
+
+    @Test
+    fun `REG-ORDER-LOCATION-CLIENT-AUTH-001 GeoPoint no altera aislamiento de Cliente`() {
+        val own = order("DEV-2345513240").copy(
+            originLocation = GeoPoint(-35.432471, -60.171559),
+            destinationLocation = GeoPoint(-35.430100, -60.170200)
+        )
+        val foreign = own.copy(
+            id = "P25-FOREIGN",
+            customerId = "DEV-2345599999",
+            customerPhone = "2345-599999"
+        )
+        val current = customer()
+
+        assertTrue(orderBelongsToCustomer(own, current))
+        assertFalse(orderBelongsToCustomer(foreign, current))
+    }
 }
