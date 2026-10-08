@@ -3,11 +3,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-val mapsApiKey = providers.gradleProperty("MAPS_API_KEY")
-    .orElse(providers.environmentVariable("MAPS_API_KEY"))
-    .orElse("NOT_CONFIGURED")
-    .get()
-
 val alphaKeystorePath = providers.environmentVariable("ALPHA_KEYSTORE_PATH").orNull?.takeIf { it.isNotBlank() }
 val alphaKeystorePassword = providers.environmentVariable("ALPHA_KEYSTORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
 val alphaKeyAlias = providers.environmentVariable("ALPHA_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
@@ -16,7 +11,7 @@ val hasPrivateAlphaSigning = listOf(alphaKeystorePath, alphaKeystorePassword, al
 
 android {
     namespace = "ar.com.mandados.app"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "ar.com.mandados.app"
@@ -39,8 +34,6 @@ android {
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", quoted(configValue("GOOGLE_WEB_CLIENT_ID")))
         buildConfigField("String", "PUNTO25_API_BASE_URL", quoted(configValue("PUNTO25_API_BASE_URL")))
         buildConfigField("String", "WHATSAPP_VERIFY_NUMBER", quoted(configValue("WHATSAPP_VERIFY_NUMBER")))
-
-        manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
     }
 
     signingConfigs {
@@ -87,7 +80,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.core:core-ktx:1.17.0")
 
-    implementation("com.google.maps.android:maps-compose:8.3.0")
+    implementation("org.maplibre.compose:maplibre-compose:0.19.0")
+    runtimeOnly("org.maplibre.compose:maplibre-compose-runtime-opengl-android:0.19.0")
     implementation("com.google.android.gms:play-services-location:21.4.0")
 
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))

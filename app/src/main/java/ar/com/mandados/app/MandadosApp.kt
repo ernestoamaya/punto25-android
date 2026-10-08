@@ -1,17 +1,13 @@
 package ar.com.mandados.app
 
-import android.Manifest
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.BorderStroke
@@ -38,23 +34,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.maps.model.CameraPosition
-import com.google.android.gms.maps.model.LatLng
-import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.Marker
-import com.google.maps.android.compose.MarkerState
-import com.google.maps.android.compose.rememberCameraPositionState
 
 private enum class Screen {
     REGISTER, WHATSAPP_VERIFY, RIDER_ACCESS, HOME, DELIVERY, SHOPPING, REVIEW, SUBMITTED, HISTORY, ORDER_DETAIL,
     CUSTOMER_PROFILE, CUSTOMER_SUPPORT,
     ADMIN_LOGIN, ADMIN, ADMIN_ORDERS, ADMIN_ORDER_DETAIL, ADMIN_REPORTS, ADMIN_SHIFTS, ADMIN_PAYMENTS, ADMIN_LEGAL,
     RIDERS, RIDER_ADMIN_VIEW, RIDER_WORKSPACE, LOCATION_PICKER
-}
-
-private enum class MapTarget {
-    DELIVERY_ORIGIN, DELIVERY_DESTINATION, SHOPPING_PRE_PICKUP, SHOPPING_STORE, SHOPPING_DESTINATION
 }
 
 private val MandadosLightColors = lightColorScheme(
@@ -415,7 +400,7 @@ private fun MandadosNavigation(controller: MandadosController) {
 }
 
 @Composable
-private fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
+internal fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Column(
         Modifier
             .fillMaxSize()
@@ -1880,117 +1865,6 @@ private fun LocationField(
     }
 }
 
-@SuppressLint("MissingPermission")
-@Composable
-private fun LocationPickerScreen(
-    c: MandadosController,
-    target: MapTarget?,
-    onBack: () -> Unit,
-    onConfirmed: () -> Unit
-) {
-    val context = LocalContext.current
-    val fused = remember { LocationServices.getFusedLocationProviderClient(context) }
-    val defaultPoint = GeoPoint(-35.432471, -60.171559)
-
-    fun currentPoint(): GeoPoint? = when (target) {
-        MapTarget.DELIVERY_ORIGIN -> c.draft.originLocation
-        MapTarget.DELIVERY_DESTINATION -> c.draft.destinationLocation
-        MapTarget.SHOPPING_PRE_PICKUP -> c.draft.prePickupLocation
-        MapTarget.SHOPPING_STORE -> c.draft.storeLocation
-        MapTarget.SHOPPING_DESTINATION -> c.draft.destinationLocation
-        null -> null
-    }
-
-    val initial = currentPoint() ?: defaultPoint
-    val markerState = remember(target) { MarkerState(LatLng(initial.latitude, initial.longitude)) }
-    val cameraState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(markerState.position, 15f)
-    }
-
-    fun useLastLocation() {
-        runCatching {
-            fused.lastLocation.addOnSuccessListener { location ->
-                if (location == null) {
-                    Toast.makeText(context, "No se pudo obtener una ubicación reciente. Mové el pin manualmente.", Toast.LENGTH_LONG).show()
-                } else {
-                    val p = LatLng(location.latitude, location.longitude)
-                    markerState.position = p
-                    cameraState.position = CameraPosition.fromLatLngZoom(p, 17f)
-                }
-            }
-        }.onFailure {
-            Toast.makeText(context, "No se pudo acceder a la ubicación. Podés mover el pin manualmente.", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-        if (grants.values.any { it }) useLastLocation()
-        else Toast.makeText(context, "Permiso de ubicación no concedido. Podés mover el pin manualmente.", Toast.LENGTH_LONG).show()
-    }
-
-    fun requestCurrentLocation() {
-        val fine = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val coarse = context.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (fine || coarse) {
-            useLastLocation()
-        } else {
-            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-        }
-    }
-
-    Page("Marcar ubicación", onBack) {
-        Text("Tocá el mapa para mover el pin o mantené presionado el marcador y arrastralo.")
-        Spacer(Modifier.height(10.dp))
-
-        GoogleMap(
-            modifier = Modifier.fillMaxWidth().height(430.dp),
-            cameraPositionState = cameraState,
-            onMapClick = { markerState.position = it }
-        ) {
-            Marker(
-                state = markerState,
-                draggable = true,
-                title = "Ubicación seleccionada"
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "Pin: ${"%.6f".format(markerState.position.latitude)}, ${"%.6f".format(markerState.position.longitude)}",
-            style = MaterialTheme.typography.bodySmall
-        )
-        OutlinedButton(onClick = ::requestCurrentLocation, modifier = Modifier.fillMaxWidth()) {
-            Text("USAR MI UBICACIÓN COMO PUNTO INICIAL")
-        }
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = {
-                val point = GeoPoint(markerState.position.latitude, markerState.position.longitude)
-                when (target) {
-                    MapTarget.DELIVERY_ORIGIN -> c.draft = c.draft.copy(originLocation = point)
-                    MapTarget.DELIVERY_DESTINATION -> c.draft = c.draft.copy(destinationLocation = point)
-                    MapTarget.SHOPPING_PRE_PICKUP -> {
-                        val d = c.draft
-                        c.draft = if (d.sameDeliveryAsPrePickup) {
-                            d.copy(prePickupLocation = point, destinationLocation = point)
-                        } else d.copy(prePickupLocation = point)
-                    }
-                    MapTarget.SHOPPING_STORE -> c.draft = c.draft.copy(storeLocation = point)
-                    MapTarget.SHOPPING_DESTINATION -> c.draft = c.draft.copy(destinationLocation = point)
-                    null -> Unit
-                }
-                onConfirmed()
-            },
-            enabled = target != null,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("USAR ESTA UBICACIÓN")
-        }
-        Spacer(Modifier.height(8.dp))
-        AssistBox("El pin y la dirección escrita son datos independientes. Mover el pin no cambia automáticamente la dirección ni la zona tarifaria.")
-    }
-}
-
 @Composable
 private fun Field(
     label: String,
@@ -2095,7 +1969,7 @@ private fun PriceLine(label: String, amount: Int?, bold: Boolean = false) {
 }
 
 @Composable
-private fun AssistBox(text: String) {
+internal fun AssistBox(text: String) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth()) { Text(text, Modifier.padding(12.dp)) }
 }
 
