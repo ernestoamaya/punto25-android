@@ -154,7 +154,7 @@ internal fun LocationPickerScreen(
 
         Spacer(Modifier.height(10.dp))
         Text(
-            "Pin: ${"%.6f".format(selectedPoint.latitude)}, ${"%.6f".format(selectedPoint.longitude)}",
+            "Ubicación marcada",
             style = MaterialTheme.typography.bodySmall
         )
         OutlinedButton(
