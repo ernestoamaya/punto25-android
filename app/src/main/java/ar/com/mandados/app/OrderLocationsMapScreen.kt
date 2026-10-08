@@ -16,12 +16,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -170,6 +175,77 @@ internal fun StructuredOrderPresentation(
                 )
             }
         }
+    }
+}
+
+@Composable
+internal fun AdminStructuredOrderPresentation(
+    c: MandadosController,
+    order: LocalOrder
+) {
+    val locations = orderLocationPoints(order)
+    var selectedLocations by remember(order.id) { mutableStateOf<List<OrderLocationPoint>>(emptyList()) }
+
+    Card(Modifier.fillMaxWidth()) {
+        StructuredOrderPresentation(c, order, Modifier.padding(12.dp))
+    }
+
+    if (locations.isNotEmpty()) {
+        Spacer(Modifier.height(10.dp))
+        Text("UBICACIONES", fontWeight = FontWeight.Bold)
+        locations.forEach { location ->
+            OutlinedButton(
+                onClick = { selectedLocations = listOf(location) },
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+            ) {
+                Text(location.kind.adminButtonLabel)
+            }
+        }
+        if (locations.size > 1) {
+            OutlinedButton(
+                onClick = { selectedLocations = locations },
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+            ) {
+                Text("VER TODAS LAS UBICACIONES")
+            }
+        }
+    }
+
+    if (selectedLocations.isNotEmpty()) {
+        OrderLocationsMapDialog(selectedLocations) { selectedLocations = emptyList() }
+    }
+}
+
+@Composable
+internal fun RiderStructuredOrderPresentation(
+    c: MandadosController,
+    order: LocalOrder
+) {
+    var showLocations by remember(order.id) { mutableStateOf(false) }
+    val assignedRiderId = order.assignedRiderId
+    val locations = if (
+        assignedRiderId != null &&
+        order.status in setOf(OrderStatus.PENDING, OrderStatus.ACCEPTED, OrderStatus.IN_PROGRESS)
+    ) {
+        authenticatedRiderOrderLocations(c, assignedRiderId, order.id)
+    } else {
+        emptyList()
+    }
+
+    StructuredOrderPresentation(c, order)
+
+    if (locations.isNotEmpty()) {
+        Text("UBICACIONES", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
+        OutlinedButton(
+            onClick = { showLocations = true },
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+        ) {
+            Text("VER UBICACIONES")
+        }
+    }
+
+    if (showLocations && locations.isNotEmpty()) {
+        OrderLocationsMapDialog(locations) { showLocations = false }
     }
 }
 
