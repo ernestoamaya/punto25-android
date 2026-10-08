@@ -21,6 +21,25 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 
+internal data class ShiftGenerationEditSnapshot(
+    val generationFrom: String,
+    val generationTo: String,
+    val fromRuleId: String?,
+    val toRuleId: String?
+)
+
+internal fun shiftGenerationEditSnapshot(
+    generationFrom: String,
+    generationTo: String,
+    fromRuleId: String?,
+    toRuleId: String?
+): ShiftGenerationEditSnapshot = ShiftGenerationEditSnapshot(
+    generationFrom = generationFrom,
+    generationTo = generationTo,
+    fromRuleId = fromRuleId,
+    toRuleId = toRuleId
+)
+
 @Composable
 internal fun AdminShiftsV2Screen(c: MandadosController, onBack: () -> Unit) {
     var editingRuleId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -41,6 +60,9 @@ internal fun AdminShiftsV2Screen(c: MandadosController, onBack: () -> Unit) {
     var pickingGenerationFrom by rememberSaveable { mutableStateOf(false) }
     var pickingGenerationTo by rememberSaveable { mutableStateOf(false) }
     var preview by remember { mutableStateOf<ShiftGenerationPreview?>(null) }
+    var generationBaseline by remember {
+        mutableStateOf(shiftGenerationEditSnapshot(generationFrom, generationTo, fromRuleId, toRuleId))
+    }
 
     var listFrom by rememberSaveable { mutableStateOf(ShiftSchedulePolicy.toIsoDate(today.minusDays(7))) }
     var listTo by rememberSaveable { mutableStateOf(ShiftSchedulePolicy.toIsoDate(today.plusDays(21))) }
@@ -54,11 +76,21 @@ internal fun AdminShiftsV2Screen(c: MandadosController, onBack: () -> Unit) {
     if (fromRuleId != null && startRules.none { it.id == fromRuleId }) fromRuleId = null
     if (toRuleId != null && endRules.none { it.id == toRuleId }) toRuleId = null
 
+    val generationCurrent = shiftGenerationEditSnapshot(generationFrom, generationTo, fromRuleId, toRuleId)
+    val generationDirty = generationCurrent != generationBaseline
+    val generationExitGuard = rememberUnsavedChangesGuardState()
+
     val from = ShiftSchedulePolicy.parseIsoDate(listFrom) ?: today.minusDays(7)
     val to = ShiftSchedulePolicy.parseIsoDate(listTo) ?: today.plusDays(21)
     val grouped = c.concreteShifts(from, to).groupBy { it.serviceDate }.toSortedMap()
 
-    ShiftPage("Turnos · Administración", onBack) {
+    UnsavedChangesGuard(
+        dirty = generationDirty,
+        state = generationExitGuard,
+        onBack = onBack
+    )
+
+    ShiftPage("Turnos · Administración", { generationExitGuard.requestExit(generationDirty, onBack) }) {
         if (!c.isShiftSubsystemReady()) {
             ShiftAssistCard("El almacenamiento de Turnos no está disponible. No se permiten operaciones hasta recuperar un estado consistente.")
             return@ShiftPage
@@ -318,6 +350,9 @@ internal fun AdminShiftsV2Screen(c: MandadosController, onBack: () -> Unit) {
             onConfirm = {
                 val result = c.confirmShiftGeneration(currentPreview.request)
                 preview = null
+                if (result.error == null && result.conflicts.isEmpty()) {
+                    generationBaseline = shiftGenerationEditSnapshot(generationFrom, generationTo, fromRuleId, toRuleId)
+                }
                 message = when {
                     result.error != null -> result.error
                     result.conflicts.isNotEmpty() -> "Generación rechazada: ${result.conflicts.first()}"
