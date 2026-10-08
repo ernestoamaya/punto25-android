@@ -1,9 +1,14 @@
 package ar.com.mandados.app
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.AlertDialog as MaterialAlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.DialogProperties
 
@@ -64,6 +69,71 @@ internal fun DiscardChangesDialog(
         }
     )
 }
+
+internal class UnsavedChangesGuardState {
+    private var pendingExit by mutableStateOf<(() -> Unit)?>(null)
+
+    internal val hasPendingExit: Boolean
+        get() = pendingExit != null
+
+    internal fun requestExit(dirty: Boolean, exit: () -> Unit) {
+        if (dirty) {
+            pendingExit = exit
+        } else {
+            exit()
+        }
+    }
+
+    internal fun keepEditing() {
+        pendingExit = null
+    }
+
+    internal fun discard(onDiscard: () -> Unit = {}) {
+        val exit = pendingExit ?: return
+        pendingExit = null
+        onDiscard()
+        exit()
+    }
+}
+
+@Composable
+internal fun rememberUnsavedChangesGuardState(): UnsavedChangesGuardState =
+    remember { UnsavedChangesGuardState() }
+
+@Composable
+internal fun UnsavedChangesGuard(
+    dirty: Boolean,
+    state: UnsavedChangesGuardState,
+    onBack: () -> Unit,
+    onDiscard: () -> Unit = {},
+    enabled: Boolean = true
+) {
+    BackHandler(enabled = enabled) {
+        state.requestExit(dirty, onBack)
+    }
+    if (state.hasPendingExit) {
+        DiscardChangesDialog(
+            onKeepEditing = state::keepEditing,
+            onDiscard = { state.discard(onDiscard) }
+        )
+    }
+}
+
+internal data class RiderProfileEditSnapshot(
+    val alias: String,
+    val currentPassword: String = "",
+    val newPassword: String = "",
+    val confirmPassword: String = ""
+)
+
+internal fun isRiderProfileEditDirty(
+    persistedAlias: String,
+    current: RiderProfileEditSnapshot
+): Boolean =
+    current.alias != persistedAlias ||
+        current.currentPassword.isNotEmpty() ||
+        current.newPassword.isNotEmpty() ||
+        current.confirmPassword.isNotEmpty()
 
 internal data class RiderEditSnapshot(
     val name: String,
