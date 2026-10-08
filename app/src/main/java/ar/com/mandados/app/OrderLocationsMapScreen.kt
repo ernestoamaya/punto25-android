@@ -142,9 +142,13 @@ internal fun OrderLocationsMapDialog(
 internal fun StructuredOrderPresentation(
     c: MandadosController,
     order: LocalOrder,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    includeLocationDetails: Boolean = true
 ) {
-    val lines = orderPresentationLines(order) { zoneId ->
+    val lines = orderPresentationLines(
+        order = order,
+        includeLocationDetails = includeLocationDetails
+    ) { zoneId ->
         when {
             zoneId == UNKNOWN_ZONE_ID -> "A confirmar"
             else -> c.zone(zoneId)?.name ?: zoneId
