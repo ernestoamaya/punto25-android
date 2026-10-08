@@ -104,7 +104,7 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-NAV-INTENT-001 | La navegación externa usa `Intent.ACTION_VIEW` + esquema `geo:` sin fijar package de Google Maps. | `RiderOrderNavigationTest.REG-RIDER-NAV-INTENT-001…` |
 | REG-RIDER-NAV-NOHANDLER-001 | La ausencia de app compatible se convierte en resultado controlado y feedback de UI, sin crash. | `RiderOrderNavigationTest.REG-RIDER-NAV-NOHANDLER-001…` |
 | REG-RIDER-NAV-GOOGLE-001 | La navegación Rider no reintroduce Google Maps SDK/Compose, `MAPS_API_KEY` ni package Google Maps forzado. | `RiderOrderNavigationTest.REG-RIDER-NAV-GOOGLE-001…` |
-| REG-ADMIN-ENTRY-001 | Desde REGISTER existe una entrada explícita a ADMIN_LOGIN y Atrás retorna al origen, sin acceso directo a ADMIN. | `AdminAccessPolicyTest.REG-ADMIN-ENTRY-001…` |
+| REG-ADMIN-ENTRY-001 | Desde REGISTER existe una entrada explícita a ADMIN_LOGIN y Atrás retorna a REGISTER, sin acceso directo a ADMIN. | `AdminAccessPolicyTest.REG-ADMIN-ENTRY-001…` |
 | REG-ADMIN-AUTH-001 | Android/config de build no contiene `ALPHA_ADMIN_PIN` ni bypass/credencial Admin alternativa; las entradas UI sólo alcanzan ADMIN_LOGIN. | `AdminAccessPolicyTest.REG-ADMIN-AUTH-001…` |
 | REG-ADMIN-AUTH-002 | Un request Admin sin Firebase token válido falla cerrado con 401. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-002…` |
 | REG-ADMIN-AUTH-003 | Un Firebase UID autenticado ausente de `admin_users` recibe 403. | Backend `worker/test/admin-auth.test.js` — `REG-ADMIN-AUTH-003…` |
@@ -120,6 +120,15 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-ADMIN-ANDROID-005 | Sólo `200` con `authorized=true` concede la sesión Admin transitoria. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-005…` |
 | REG-ADMIN-ANDROID-006 | Salir del área Admin o cerrar sesión invalida la autorización transitoria. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-006…` |
 | REG-ADMIN-ANDROID-007 | Un proceso recreado no conserva autorización Admin y obliga a pasar nuevamente por el gate backend. | `AdminAccessPolicyTest.REG-ADMIN-ANDROID-007…` |
+| REG-ADMIN-SESSION-ISOLATION-001 | Admin utiliza FirebaseApp/FirebaseAuth secundario separado del DEFAULT Cliente. | `AdminAccessPolicyTest.REG-ADMIN-SESSION-ISOLATION-001…` |
+| REG-ADMIN-SESSION-ISOLATION-002 | El gate /v1/admin/access obtiene token exclusivamente de FirebaseAuth Admin. | `AdminAccessPolicyTest.REG-ADMIN-SESSION-ISOLATION-002…` |
+| REG-ADMIN-SESSION-ISOLATION-003 | La autenticación/salida Admin no cierra ni modifica sesión Firebase Cliente. | `AdminAccessPolicyTest.REG-ADMIN-SESSION-ISOLATION-003…` |
+| REG-ADMIN-ACCOUNT-SWITCH-001 | UNAUTHORIZED deniega acceso y USAR OTRA CUENTA reabre selección explícita. | `AdminAccessPolicyTest.REG-ADMIN-ACCOUNT-SWITCH-001…` |
+| REG-ADMIN-HOME-001 | Home Cliente no expone Administración ni navegación Admin. | `AdminAccessPolicyTest.REG-ADMIN-HOME-001…` |
+| REG-ADMIN-ENTRY-002 | REGISTER conserva Administración, siempre a ADMIN_LOGIN. | `AdminAccessPolicyTest.REG-ADMIN-ENTRY-002…` |
+| REG-ADMIN-FAILCLOSED-001 | Sin token o con respuestas negativas, inválidas o errores nunca se autoriza. | `AdminAccessPolicyTest.REG-ADMIN-FAILCLOSED-001…` |
+| REG-ADMIN-EXIT-001 | Salir Admin limpia autorización y FirebaseAuth secundario sin tocar Cliente. | `AdminAccessPolicyTest.REG-ADMIN-EXIT-001…` |
+| REG-ADMIN-RECREATE-001 | Recreación no restaura autorización ni abre ADMIN por identidad persistida. | `AdminAccessPolicyTest.REG-ADMIN-RECREATE-001…` |
 | REG-PACKAGING-SHA-001 | Un SHA completo real que pertenece al historial confiable y seguro de `main` es aceptado. | `.github/workflows/alpha-apk.yml` — `Validate target SHA and trusted main ancestry` (`validate_target "$TRUSTED_MAIN_SHA"`) |
 | REG-PACKAGING-SHA-002 | Un SHA inexistente se rechaza antes del checkout, secrets, build, firma y artifact. | `.github/workflows/alpha-apk.yml` — `NONEXISTENT_SHA` self-test en `Validate target SHA and trusted main ancestry` |
 | REG-PACKAGING-SHA-003 | Un commit existente fuera de la ancestry confiable de `main` se rechaza. | `.github/workflows/alpha-apk.yml` — `SYNTHETIC_NON_MAIN_SHA` self-test en `Validate target SHA and trusted main ancestry` |
