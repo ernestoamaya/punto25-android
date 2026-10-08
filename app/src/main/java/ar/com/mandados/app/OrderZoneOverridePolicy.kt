@@ -292,6 +292,11 @@ internal fun evaluateOrderZoneOverride(
     }.toMap()
     if (nextOverrides == currentOrder.zoneOverrides) return denied("No hay cambios para aplicar.")
 
+    val existingPayment = paymentMatches.singleOrNull()
+    if (existingPayment != null && isPaymentFinanciallyCommitted(existingPayment)) {
+        return denied("La corrección no puede aplicarse porque el pago ya está financieramente comprometido.")
+    }
+
     val candidatePricing = calculateOrderPricing(currentOrder, nextOverrides, config)
     val candidateStatus = when (currentOrder.status) {
         OrderStatus.AWAITING_QUOTE -> if (candidatePricing.needsQuote) OrderStatus.AWAITING_QUOTE else OrderStatus.PENDING
@@ -313,7 +318,7 @@ internal fun evaluateOrderZoneOverride(
     val paymentMutation = evaluateOrderPaymentMutation(
         currentOrder = currentOrder,
         candidateOrder = candidate,
-        payment = paymentMatches.singleOrNull()
+        payment = existingPayment
     )
     val nextLabel = nextOverride?.let(::overrideLabel) ?: declaredLabel
     if (paymentMutation == OrderPaymentMutationAction.DENY) {
