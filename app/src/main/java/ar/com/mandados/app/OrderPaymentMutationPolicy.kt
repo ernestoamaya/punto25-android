@@ -53,10 +53,14 @@ internal fun evaluateOrderPaymentMutation(
     if (payment == null) return OrderPaymentMutationAction.ORDER_AND_PAYMENT
     if (payment.orderId != currentOrder.id) return OrderPaymentMutationAction.DENY
 
+    val currentEconomic = economicSnapshotFor(currentOrder)
     val candidateEconomic = economicSnapshotFor(candidateOrder)
     val paymentEconomic = economicSnapshotFor(payment)
     if (isPaymentFinanciallyCommitted(payment)) {
-        return if (candidateEconomic == paymentEconomic) {
+        return if (
+            currentEconomic == candidateEconomic &&
+            candidateEconomic == paymentEconomic
+        ) {
             OrderPaymentMutationAction.ORDER_ONLY
         } else {
             OrderPaymentMutationAction.DENY
