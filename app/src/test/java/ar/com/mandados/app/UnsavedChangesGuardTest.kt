@@ -45,19 +45,22 @@ class UnsavedChangesGuardTest {
 
     @Test
     fun `REG-UNSAVED-DISCARD-001 discard runs no persistence and exits exactly once`() {
-        var exits = 0
+        var firstExit = 0
+        var secondExit = 0
         var discardCallbacks = 0
         var persistedWrites = 0
         val guard = UnsavedChangesGuardState()
 
-        guard.requestExit(dirty = true) { exits += 1 }
+        guard.requestExit(dirty = true) { firstExit += 1 }
+        guard.requestExit(dirty = true) { secondExit += 1 }
         guard.discard { discardCallbacks += 1 }
         guard.discard {
             discardCallbacks += 1
             persistedWrites += 1
         }
 
-        assertEquals(1, exits)
+        assertEquals(1, firstExit)
+        assertEquals(0, secondExit)
         assertEquals(1, discardCallbacks)
         assertEquals(0, persistedWrites)
         assertFalse(guard.hasPendingExit)
