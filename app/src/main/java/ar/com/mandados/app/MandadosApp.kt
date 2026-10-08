@@ -400,7 +400,7 @@ private fun MandadosNavigation(controller: MandadosController) {
 }
 
 @Composable
-private fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
+internal fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Column(
         Modifier
             .fillMaxSize()
@@ -1969,7 +1969,7 @@ private fun PriceLine(label: String, amount: Int?, bold: Boolean = false) {
 }
 
 @Composable
-private fun AssistBox(text: String) {
+internal fun AssistBox(text: String) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), modifier = Modifier.fillMaxWidth()) { Text(text, Modifier.padding(12.dp)) }
 }
 
