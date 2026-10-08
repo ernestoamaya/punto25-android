@@ -56,6 +56,60 @@ class OrderPaymentMutationIntegrityTest {
     }
 
     @Test
+    fun `REG-PAY-MUTATION-LOCK-001 contradictory committed payment cannot reconcile order by edit`() {
+        val current = order("CONTRADICTORY-PURE", total = 1000, paymentMethod = DeliveryPaymentMethod.CASH)
+        val committedAmountMismatch = payment(current, status = PaymentStatus.CONFIRMED).copy(expectedAmount = 2000)
+        val amountCandidate = current.copy(totalAmount = 2000)
+        assertEquals(
+            OrderPaymentMutationAction.DENY,
+            evaluateOrderPaymentMutation(current, amountCandidate, committedAmountMismatch)
+        )
+
+        val committedChannelMismatch = payment(current, status = PaymentStatus.CONFIRMED).copy(
+            channel = PaymentChannel.RIDER_TRANSFER
+        )
+        val channelCandidate = current.copy(deliveryPayment = DeliveryPaymentMethod.TRANSFER)
+        assertEquals(
+            OrderPaymentMutationAction.DENY,
+            evaluateOrderPaymentMutation(current, channelCandidate, committedChannelMismatch)
+        )
+
+        val zones = configurePricedZones()
+        val persistedOrder = order(
+            id = "CONTRADICTORY-EDIT",
+            total = 1000,
+            paymentMethod = DeliveryPaymentMethod.CASH,
+            originZoneId = zones.first,
+            destinationZoneId = zones.first
+        )
+        val committedPayment = payment(persistedOrder, status = PaymentStatus.CONFIRMED).copy(expectedAmount = 2000)
+        seed(persistedOrder, committedPayment)
+        val c = MandadosController(context)
+        val beforeOrders = c.orders
+        val beforePayments = c.payments
+        val beforeEvents = c.order(persistedOrder.id)!!.events
+
+        val edited = c.draftFromOrder(persistedOrder).copy(
+            destinationZoneId = zones.second,
+            notes = "No debe reconciliar una contradicción previa"
+        )
+        assertFalse(c.editOrder(persistedOrder.id, edited, "Intento de reconciliación implícita"))
+        assertEquals(beforeOrders, c.orders)
+        assertEquals(beforePayments, c.payments)
+        assertEquals(beforeEvents, c.order(persistedOrder.id)!!.events)
+        assertEquals(persistedOrder, c.order(persistedOrder.id))
+        assertEquals(committedPayment, c.paymentForOrder(persistedOrder.id))
+
+        val store = LocalStore(context)
+        assertEquals(beforeOrders, store.loadOrders())
+        assertEquals(beforePayments, store.loadPayments())
+        val restarted = MandadosController(context)
+        assertEquals(persistedOrder, restarted.order(persistedOrder.id))
+        assertEquals(committedPayment, restarted.paymentForOrder(persistedOrder.id))
+        assertEquals(beforeEvents, restarted.order(persistedOrder.id)!!.events)
+    }
+
+    @Test
     fun `REG-PAY-RIDER-LOCK-001 committed rider transfer blocks reassignment and unassignment without side effects`() {
         val riderA = approvedRider("RID-A")
         val riderB = approvedRider("RID-B")
