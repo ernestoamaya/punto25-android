@@ -138,7 +138,7 @@ class UnsavedChangesGuardTest {
         val backHandler = app.substringAfter("BackHandler(enabled = true)").substringBefore("if (requiresAdminReauthorization) {\n        AdminLoginScreen")
         assertTrue(backHandler.trimStart().startsWith("{\n        if (requiresAdminReauthorization)"))
 
-        val riderRoute = app.substringAfter("Screen.RIDER_WORKSPACE ->").substringBefore("Screen.LOCATION_PICKER")
+        val riderRoute = app.substringAfterLast("Screen.RIDER_WORKSPACE ->").substringBefore("Screen.LOCATION_PICKER")
         assertTrue(riderRoute.contains("if (!riderWorkspaceSessionValid(controller, riderId))"))
         assertTrue(riderRoute.indexOf("if (!riderWorkspaceSessionValid(controller, riderId))") < riderRoute.indexOf("RiderDashboardScreen("))
         assertTrue(operations.contains("enabled = c.hasAuthenticatedRiderSession(rider.id)"))
