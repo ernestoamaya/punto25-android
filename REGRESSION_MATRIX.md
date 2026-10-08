@@ -152,7 +152,7 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-ORDER-LOCATION-STRUCTURED-001 | Visor usa sólo GeoPoint estructurados según tipo de servicio; nunca detail/URL/texto/dirección. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-STRUCTURED-001…` |
 | REG-ORDER-LOCATION-READONLY-001 | Visor interno no pide ubicación/permisos ni muta pedido/draft/zona/estado. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-READONLY-001…` |
 | REG-ORDER-LOCATION-POINTS-001 | DELIVERY muestra sólo GeoPoints existentes de retiro/entrega. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-POINTS-001…` |
-| REG-ORDER-LOCATION-POINTS-002 | SHOPPING muestra sólo GeoPoints existentes de retiro previo/comercio/entrega existentes. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-POINTS-002…` |
+| REG-ORDER-LOCATION-POINTS-002 | SHOPPING muestra sólo GeoPoints existentes de retiro previo/comercio/entrega. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-POINTS-002…` |
 | REG-ORDER-LOCATION-LEGACY-001 | URL legacy sin GeoPoint no genera ubicación ficticia. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-LEGACY-001…` |
 | REG-ORDER-LOCATION-CLIENT-AUTH-001 | GeoPoints no alteran aislamiento Cliente; pedido ajeno sigue inaccesible. | `CustomerOrderOwnershipTest.REG-ORDER-LOCATION-CLIENT-AUTH-001…` |
 | REG-ORDER-LOCATION-RIDER-AUTH-001 | Sólo Rider autenticado asignado al pedido obtiene ubicaciones. | `RiderOrderLocationAuthorizationTest.REG-ORDER-LOCATION-RIDER-AUTH-001…` |
