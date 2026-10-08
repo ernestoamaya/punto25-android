@@ -34,6 +34,32 @@ class ShiftV2UiPolicyTest {
     }
 
     @Test
+    fun `REG-SHIFT-GEN-UNSAVED-001 generation dirty uses only persistence parameters and success resets baseline`() {
+        val initial = shiftGenerationEditSnapshot("2026-10-08", "2026-10-15", null, null)
+        assertFalse(initial != shiftGenerationEditSnapshot("2026-10-08", "2026-10-15", null, null))
+        assertTrue(initial != initial.copy(generationFrom = "2026-10-09"))
+        assertTrue(initial != initial.copy(generationTo = "2026-10-16"))
+        assertTrue(initial != initial.copy(fromRuleId = "RULE-A"))
+        assertTrue(initial != initial.copy(toRuleId = "RULE-B"))
+
+        val source = projectSource("src/main/java/ar/com/mandados/app/ShiftScreensV2.kt")
+        val snapshotType = source.substringAfter("internal data class ShiftGenerationEditSnapshot(").substringBefore(")\n\ninternal fun shiftGenerationEditSnapshot")
+        assertFalse(snapshotType.contains("listFrom"))
+        assertFalse(snapshotType.contains("listTo"))
+
+        val generation = source.substringAfter("internal fun AdminShiftsV2Screen(").substringBefore("@Composable\ninternal fun RiderShiftsV2")
+        assertTrue(generation.contains("val generationDirty = generationCurrent != generationBaseline"))
+        assertTrue(generation.contains("generationExitGuard.requestExit(generationDirty, onBack)"))
+        assertTrue(generation.contains("preview = c.previewShiftGeneration("))
+        val previewAction = generation.substringAfter("Text(\"PREVISUALIZAR\")").substringBefore("ShiftSectionTitle(\"TURNOS CONCRETOS POR FECHA\")")
+        assertFalse(previewAction.contains("generationBaseline ="))
+
+        val confirm = generation.substringAfter("val result = c.confirmShiftGeneration(currentPreview.request)").substringBefore("message = when")
+        assertTrue(confirm.contains("if (result.error == null && result.conflicts.isEmpty())"))
+        assertTrue(confirm.contains("generationBaseline = shiftGenerationEditSnapshot("))
+    }
+
+    @Test
     fun `REG-SHIFT-UI-001 Admin v2 distingue reglas generacion y turnos concretos sin exponer lineage`() {
         val source = projectSource("src/main/java/ar/com/mandados/app/ShiftScreensV2.kt")
 

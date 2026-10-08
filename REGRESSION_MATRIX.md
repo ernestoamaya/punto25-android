@@ -168,5 +168,15 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-RIDER-EDIT-REVERT-001 | Revertir exactamente un cambio al estado inicial devuelve el formulario a limpio. | `DialogDismissPolicyTest.REG-RIDER-EDIT-REVERT-001…` |
 | REG-RIDER-EDIT-REVERT-002 | Revertir por completo múltiples cambios devuelve el formulario a limpio. | `DialogDismissPolicyTest.REG-RIDER-EDIT-REVERT-002…` |
 | REG-RIDER-EDIT-SAVE-001 | Guardar un Repartidor continúa persistiendo los campos/documentos normalmente; un fallo de guardado no debe cerrar el formulario. | `DialogDismissPolicyTest.REG-RIDER-EDIT-SAVE-001…` |
+| REG-UNSAVED-GUARD-001 | Una salida limpia ocurre normalmente; una salida dirty queda interceptada, incluido Back Android/gesto mediante el guard local. | `UnsavedChangesGuardTest.REG-UNSAVED-GUARD-001…` |
+| REG-UNSAVED-KEEP-001 | SEGUIR EDITANDO cancela la salida pendiente y conserva exactamente el snapshot editable. | `UnsavedChangesGuardTest.REG-UNSAVED-KEEP-001…` |
+| REG-UNSAVED-DISCARD-001 | DESCARTAR ejecuta el descarte sin persistir y consume exactamente una única salida confirmada. | `UnsavedChangesGuardTest.REG-UNSAVED-DISCARD-001…` |
+| REG-ORDER-DRAFT-UNSAVED-001 | Compra/Encargo/Trámite/Envío comparan el `OrderDraft` completo contra una baseline estable; mapa y Review no reinician esa baseline. | `UnsavedChangesGuardTest.REG-ORDER-DRAFT-UNSAVED-001…` |
+| REG-MAP-UNSAVED-001 | Un punto cambiado sin confirmar queda protegido; DESCARTAR vuelve sin aplicar el punto al `OrderDraft`. | `MapSelectionPolicyTest.REG-MAP-UNSAVED-001…` |
+| REG-RIDER-PROFILE-UNSAVED-001 | Alias y campos de contraseña del perfil propio Rider quedan protegidos en VOLVER/Back/Privacidad/Soporte; errores conservan el estado editable. | `UnsavedChangesGuardTest.REG-RIDER-PROFILE-UNSAVED-001…` |
+| REG-CUSTOMER-REG-UNSAVED-001 | Registro Cliente protege nombre/teléfono y al descartar limpia sólo `pendingCustomer` y los campos locales, sin tocar identidad/sesión persistida. | `UnsavedChangesGuardTest.REG-CUSTOMER-REG-UNSAVED-001…` |
+| REG-SHIFT-GEN-UNSAVED-001 | Sólo los parámetros de generación de Turnos forman dirty; preview no limpia, éxito sí y error/conflicto conserva dirty. | `ShiftV2UiPolicyTest.REG-SHIFT-GEN-UNSAVED-001…` |
+| REG-UNSAVED-AUTH-001 | Invalidación de sesión Admin/Rider mantiene prioridad y no puede quedar retenida por un guard de cambios sin guardar. | `UnsavedChangesGuardTest.REG-UNSAVED-AUTH-001…` |
+| REG-UNSAVED-SAVEFAIL-001 | Fallos de creación/guardado relevantes no limpian baseline ni cierran el editor, y conservan los datos para corregir/reintentar. | `UnsavedChangesGuardTest.REG-UNSAVED-SAVEFAIL-001…` |
 
 Los nuevos bugs de Clase A deben incorporar, cuando sea técnicamente razonable, un `REG-*` y un test permanente antes de cerrar la tanda que los corrige.

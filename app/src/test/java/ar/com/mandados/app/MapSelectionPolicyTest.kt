@@ -162,6 +162,23 @@ class MapSelectionPolicyTest {
     }
 
     @Test
+    fun `REG-MAP-UNSAVED-001 punto no confirmado queda local y descarte no modifica OrderDraft`() {
+        val picker = projectFile("app/src/main/java/ar/com/mandados/app/MapLocationPicker.kt")
+        val before = seededDraft()
+        val selectedButUnconfirmed = GeoPoint(-35.44, -60.18)
+
+        assertTrue(selectedButUnconfirmed != mapPointForTarget(before, MapTarget.DELIVERY_ORIGIN))
+        assertEquals(GeoPoint(1.0, 2.0), before.originLocation)
+        assertTrue(picker.contains("val initialPoint = rememberSaveable(target, saver = geoPointSaver)"))
+        assertTrue(picker.contains("var selectedPoint by rememberSaveable(target, stateSaver = geoPointSaver)"))
+        assertTrue(picker.contains("val dirty = selectedPoint != initialPoint"))
+        assertTrue(picker.contains("UnsavedChangesGuard("))
+        assertTrue(picker.contains("exitGuard.requestExit(dirty, onBack)"))
+        assertEquals(1, Regex("applyMapSelection\\(").findAll(picker).count())
+        assertTrue(picker.contains("c.draft = applyMapSelection(c.draft, target, selectedPoint)"))
+    }
+
+    @Test
     fun `REG-MAPS-ATTRIBUTION-001 selector conserva overlay predeterminado de MapLibre`() {
         val picker = projectFile("app/src/main/java/ar/com/mandados/app/MapLocationPicker.kt")
 

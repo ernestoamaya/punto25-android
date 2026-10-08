@@ -100,7 +100,9 @@ private val ReceptionPausedRedDark = Color(0xFFFFB4AB)
 @Composable
 fun MandadosApp() {
     val context = LocalContext.current
-    val controller = remember { MandadosController(context.applicationContext) }
+    val controller = rememberSaveable(
+        saver = mandadosControllerSaver(context.applicationContext)
+    ) { MandadosController(context.applicationContext) }
     val systemDark = isSystemInDarkTheme()
     val useDark = when (controller.config.themeMode) {
         ThemeMode.SYSTEM -> systemDark
@@ -124,6 +126,9 @@ private fun MandadosNavigation(controller: MandadosController) {
     var selectedRiderId by rememberSaveable { mutableStateOf<String?>(null) }
     var mapTarget by rememberSaveable { mutableStateOf<MapTarget?>(null) }
     var lastRootBackAt by rememberSaveable { mutableStateOf(0L) }
+    var orderDraftBaseline by rememberSaveable(saver = orderDraftBaselineStateSaver) {
+        mutableStateOf<OrderDraft?>(null)
+    }
     val adminSession = remember { AdminAccessSession() }
     val protectedAdminScreens = remember {
         setOf(
@@ -141,6 +146,15 @@ private fun MandadosNavigation(controller: MandadosController) {
     val requiresAdminReauthorization = screen in protectedAdminScreens &&
         (!adminSession.authorized || !AdminGoogleAuthIntegration.hasCurrentUser(context))
 
+    LaunchedEffect(screen) {
+        if (
+            orderDraftBaseline == null &&
+            screen in setOf(Screen.DELIVERY, Screen.SHOPPING, Screen.REVIEW, Screen.LOCATION_PICKER)
+        ) {
+            orderDraftBaseline = controller.draft
+        }
+    }
+
     fun openMap(target: MapTarget) {
         mapTarget = target
         screen = Screen.LOCATION_PICKER
@@ -150,6 +164,25 @@ private fun MandadosNavigation(controller: MandadosController) {
         MapTarget.DELIVERY_ORIGIN, MapTarget.DELIVERY_DESTINATION -> Screen.DELIVERY
         MapTarget.SHOPPING_PRE_PICKUP, MapTarget.SHOPPING_STORE, MapTarget.SHOPPING_DESTINATION -> Screen.SHOPPING
         null -> Screen.HOME
+    }
+
+    fun leaveOrderDraft() {
+        orderDraftBaseline = null
+        screen = Screen.HOME
+    }
+
+    fun handleRootBack() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRootBackAt <= 2_000L) {
+            (context as? Activity)?.finish()
+        } else {
+            lastRootBackAt = now
+            Toast.makeText(
+                context,
+                "Presione nuevamente Atrás/Volver para salir de la aplicación",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     fun navigateBack() {
@@ -187,17 +220,7 @@ private fun MandadosNavigation(controller: MandadosController) {
             AdminGoogleAuthIntegration.signOut(context)
             screen = Screen.REGISTER
         } else if (screen == Screen.HOME || screen == Screen.REGISTER) {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastRootBackAt <= 2_000L) {
-                (context as? Activity)?.finish()
-            } else {
-                lastRootBackAt = now
-                Toast.makeText(
-                    context,
-                    "Presione nuevamente Atrás/Volver para salir de la aplicación",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
+            handleRootBack()
         } else {
             navigateBack()
         }
@@ -222,6 +245,7 @@ private fun MandadosNavigation(controller: MandadosController) {
                 if (controller.confirmRegistration()) screen = Screen.HOME
                 else Toast.makeText(context, "No se pudo confirmar la identidad Google. Volvé a intentar.", Toast.LENGTH_LONG).show()
             },
+            onBack = ::handleRootBack,
             onRider = { screen = Screen.RIDER_ACCESS },
             onAdmin = {
                 adminSession.clear()
@@ -247,6 +271,7 @@ private fun MandadosNavigation(controller: MandadosController) {
             controller,
             onCategory = { category ->
                 controller.resetDraftForCategory(category)
+                orderDraftBaseline = controller.draft
                 screen = if (category == ServiceCategory.PURCHASE) Screen.SHOPPING else Screen.DELIVERY
             },
             onHistory = { screen = Screen.HISTORY },
@@ -261,13 +286,15 @@ private fun MandadosNavigation(controller: MandadosController) {
         )
         Screen.DELIVERY -> DeliveryForm(
             controller,
-            onBack = { screen = Screen.HOME },
+            baseline = orderDraftBaseline ?: controller.draft,
+            onBack = ::leaveOrderDraft,
             onContinue = { screen = Screen.REVIEW },
             onMap = ::openMap
         )
         Screen.SHOPPING -> ShoppingForm(
             controller,
-            onBack = { screen = Screen.HOME },
+            baseline = orderDraftBaseline ?: controller.draft,
+            onBack = ::leaveOrderDraft,
             onContinue = { screen = Screen.REVIEW },
             onMap = ::openMap
         )
@@ -279,6 +306,7 @@ private fun MandadosNavigation(controller: MandadosController) {
                 is OrderCreationResult.Created -> {
                     val order = result.order
                     lastOrderId = order.id
+                    orderDraftBaseline = null
                     if (order.operationMode == OperationMode.SIMPLE_WHATSAPP) {
                         openWhatsApp(context, controller.config.whatsappReceiver, order.whatsappMessage)
                     }
@@ -442,7 +470,13 @@ internal fun Page(title: String, onBack: (() -> Unit)? = null, content: @Composa
 }
 
 @Composable
-private fun RegisterScreen(c: MandadosController, onContinue: () -> Unit, onRider: () -> Unit, onAdmin: () -> Unit) {
+private fun RegisterScreen(
+    c: MandadosController,
+    onContinue: () -> Unit,
+    onBack: () -> Unit,
+    onRider: () -> Unit,
+    onAdmin: () -> Unit
+) {
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
@@ -451,6 +485,8 @@ private fun RegisterScreen(c: MandadosController, onContinue: () -> Unit, onRide
     var sub by rememberSaveable { mutableStateOf("") }
     var busy by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
+    val exitGuard = rememberUnsavedChangesGuardState()
+    val dirty = name.isNotBlank() || area.isNotBlank() || sub.isNotBlank() || c.pendingCustomer != null
     val info = c.areaCodes[area]
     val valid = name.trim().isNotEmpty() && info != null && sub.length == info.subscriberDigits && !area.startsWith("0")
     val fieldColors = OutlinedTextFieldDefaults.colors(
@@ -464,6 +500,21 @@ private fun RegisterScreen(c: MandadosController, onContinue: () -> Unit, onRide
         disabledTextColor = Color.White.copy(alpha = 0.5f),
         disabledBorderColor = Color.White.copy(alpha = 0.30f),
         disabledLabelColor = Color.White.copy(alpha = 0.45f)
+    )
+
+    fun discardRegistrationEdits() {
+        name = ""
+        area = ""
+        sub = ""
+        error = ""
+        c.pendingCustomer = null
+    }
+
+    UnsavedChangesGuard(
+        dirty = dirty,
+        state = exitGuard,
+        onBack = onBack,
+        onDiscard = ::discardRegistrationEdits
     )
 
     Box(Modifier.fillMaxSize()) {
@@ -622,10 +673,10 @@ private fun RegisterScreen(c: MandadosController, onContinue: () -> Unit, onRide
                     Text("Tu ciudad en movimiento", color = Color(0xFFF4B538), fontWeight = FontWeight.Bold)
                 }
             }
-            TextButton(onClick = onRider, modifier = Modifier.padding(top = 8.dp)) {
+            TextButton(onClick = { exitGuard.requestExit(dirty, onRider) }, modifier = Modifier.padding(top = 8.dp)) {
                 Text("SOY REPARTIDOR", color = Color.White, fontWeight = FontWeight.Bold)
             }
-            TextButton(onClick = onAdmin) {
+            TextButton(onClick = { exitGuard.requestExit(dirty, onAdmin) }) {
                 Text("ADMINISTRACIÓN", color = Color.White, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(24.dp))
@@ -987,11 +1038,14 @@ private fun BigAction(title: String, subtitle: String, enabled: Boolean, onClick
 @Composable
 private fun DeliveryForm(
     c: MandadosController,
+    baseline: OrderDraft,
     onBack: () -> Unit,
     onContinue: () -> Unit,
     onMap: (MapTarget) -> Unit
 ) {
     val d = c.draft
+    val dirty = d != baseline
+    val exitGuard = rememberUnsavedChangesGuardState()
     val originOk = d.originAddress.isNotBlank() || d.originLocation != null
     val destinationOk = d.destinationAddress.isNotBlank() || d.destinationLocation != null
 
@@ -1001,7 +1055,15 @@ private fun DeliveryForm(
         ServiceCategory.SHIPMENT -> "Envío"
         ServiceCategory.PURCHASE -> "Compra"
     }
-    Page(title, onBack) {
+
+    UnsavedChangesGuard(
+        dirty = dirty,
+        state = exitGuard,
+        onBack = onBack,
+        onDiscard = { c.draft = baseline }
+    )
+
+    Page(title, { exitGuard.requestExit(dirty, onBack) }) {
         Text("Retiro", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Field("Dirección (opcional si marcás el pin)", d.originAddress) { c.draft = c.draft.copy(originAddress = it) }
         Field("Referencia (opcional)", d.originReference) { c.draft = c.draft.copy(originReference = it) }
@@ -1039,11 +1101,14 @@ private fun DeliveryForm(
 @Composable
 private fun ShoppingForm(
     c: MandadosController,
+    baseline: OrderDraft,
     onBack: () -> Unit,
     onContinue: () -> Unit,
     onMap: (MapTarget) -> Unit
 ) {
     val d = c.draft
+    val dirty = d != baseline
+    val exitGuard = rememberUnsavedChangesGuardState()
     val needsPre = d.requiresPrePickup()
 
     fun setInstruction(value: PurchaseInstructionType) {
@@ -1095,7 +1160,14 @@ private fun ShoppingForm(
         }
     }
 
-    Page("Realizar un pedido", onBack) {
+    UnsavedChangesGuard(
+        dirty = dirty,
+        state = exitGuard,
+        onBack = onBack,
+        onDiscard = { c.draft = baseline }
+    )
+
+    Page("Realizar un pedido", { exitGuard.requestExit(dirty, onBack) }) {
         Text("¿Cómo nos vas a indicar qué necesitás?", fontWeight = FontWeight.Bold)
         EnumRadio("Escribir el pedido en la app", d.instructionType == PurchaseInstructionType.IN_APP) { setInstruction(PurchaseInstructionType.IN_APP) }
         EnumRadio("Entregar lista / nota / receta al Repartidor", d.instructionType == PurchaseInstructionType.PHYSICAL_NOTE) { setInstruction(PurchaseInstructionType.PHYSICAL_NOTE) }
