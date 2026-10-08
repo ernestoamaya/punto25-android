@@ -78,7 +78,7 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.core:core-ktx:1.17.0")
+    implementation("androidx.core:core-ktx:1.19.1")
 
     implementation("org.maplibre.compose:maplibre-compose:0.19.0")
     runtimeOnly("org.maplibre.compose:maplibre-compose-runtime-opengl-android:0.19.0")
