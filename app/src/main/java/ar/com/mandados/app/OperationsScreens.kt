@@ -856,7 +856,7 @@ internal fun RiderDashboardScreen(c: MandadosController, riderId: String?, onBac
                 onSection = ::requestSection
             )
             RiderSection.PERMISSIONS -> PermissionsScreen()
-            RiderSection.SUPPORT -> SupportScreen(c)
+            RiderSection.SUPPORT -> SupportScreen(c, SupportAudience.RIDER)
         }
     }
 }
@@ -2134,11 +2134,11 @@ private fun PermissionsScreen() {
 }
 
 @Composable
-private fun SupportScreen(c: MandadosController) {
+private fun SupportScreen(c: MandadosController, audience: SupportAudience) {
     val context = LocalContext.current
     val number = c.config.supportWhatsapp.ifBlank { c.config.legalProfile.supportWhatsapp }
     Text("¿En qué podemos ayudarte?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-    val reasons = listOf("Problema con un pedido", "Turnos", "Balance / pagos", "Documentación", "Problemas con la app", "Otro motivo")
+    val reasons = supportReasonsFor(audience)
     reasons.forEach { reason ->
         Card(
             Modifier.fillMaxWidth().padding(top = 7.dp).clickable(enabled = number.isNotBlank()) {
@@ -2791,7 +2791,7 @@ internal fun CustomerProfileScreen(c: MandadosController, onBack: () -> Unit, on
 @Composable
 internal fun CustomerSupportScreen(c: MandadosController, onBack: () -> Unit) {
     OpsPage("Soporte · Punto25", onBack) {
-        SupportScreen(c)
+        SupportScreen(c, SupportAudience.CUSTOMER)
     }
 }
 

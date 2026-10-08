@@ -178,5 +178,8 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-SHIFT-GEN-UNSAVED-001 | Sólo los parámetros de generación de Turnos forman dirty; preview no limpia, éxito sí y error/conflicto conserva dirty. | `ShiftV2UiPolicyTest.REG-SHIFT-GEN-UNSAVED-001…` |
 | REG-UNSAVED-AUTH-001 | Invalidación de sesión Admin/Rider mantiene prioridad y no puede quedar retenida por un guard de cambios sin guardar. | `UnsavedChangesGuardTest.REG-UNSAVED-AUTH-001…` |
 | REG-UNSAVED-SAVEFAIL-001 | Fallos de creación/guardado relevantes no limpian baseline ni cierran el editor, y conservan los datos para corregir/reintentar. | `UnsavedChangesGuardTest.REG-UNSAVED-SAVEFAIL-001…` |
+| REG-SUPPORT-CUSTOMER-001 | Cliente obtiene exactamente sus cinco categorías y no recibe categorías exclusivas del Rider. | `SupportRolePolicyTest.REG-SUPPORT-CUSTOMER-001…` |
+| REG-SUPPORT-RIDER-001 | Rider obtiene exactamente sus seis categorías de soporte en orden determinista. | `SupportRolePolicyTest.REG-SUPPORT-RIDER-001…` |
+| REG-SUPPORT-WIRING-001 | Los entry points reales cablean Rider → RIDER y Cliente → CUSTOMER; `SupportScreen` delega en la política pura. | `SupportRolePolicyTest.REG-SUPPORT-WIRING-001…` |
 
 Los nuevos bugs de Clase A deben incorporar, cuando sea técnicamente razonable, un `REG-*` y un test permanente antes de cerrar la tanda que los corrige.
