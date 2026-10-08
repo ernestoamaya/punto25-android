@@ -100,7 +100,9 @@ private val ReceptionPausedRedDark = Color(0xFFFFB4AB)
 @Composable
 fun MandadosApp() {
     val context = LocalContext.current
-    val controller = remember { MandadosController(context.applicationContext) }
+    val controller = rememberSaveable(
+        saver = mandadosControllerSaver(context.applicationContext)
+    ) { MandadosController(context.applicationContext) }
     val systemDark = isSystemInDarkTheme()
     val useDark = when (controller.config.themeMode) {
         ThemeMode.SYSTEM -> systemDark
@@ -124,7 +126,9 @@ private fun MandadosNavigation(controller: MandadosController) {
     var selectedRiderId by rememberSaveable { mutableStateOf<String?>(null) }
     var mapTarget by rememberSaveable { mutableStateOf<MapTarget?>(null) }
     var lastRootBackAt by rememberSaveable { mutableStateOf(0L) }
-    var orderDraftBaseline by remember { mutableStateOf<OrderDraft?>(null) }
+    var orderDraftBaseline by rememberSaveable(saver = orderDraftBaselineStateSaver) {
+        mutableStateOf<OrderDraft?>(null)
+    }
     val adminSession = remember { AdminAccessSession() }
     val protectedAdminScreens = remember {
         setOf(

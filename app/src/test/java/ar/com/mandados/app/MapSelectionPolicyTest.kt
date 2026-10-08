@@ -169,7 +169,8 @@ class MapSelectionPolicyTest {
 
         assertTrue(selectedButUnconfirmed != mapPointForTarget(before, MapTarget.DELIVERY_ORIGIN))
         assertEquals(GeoPoint(1.0, 2.0), before.originLocation)
-        assertTrue(picker.contains("val initialPoint = remember(target)"))
+        assertTrue(picker.contains("val initialPoint = rememberSaveable(target, saver = geoPointSaver)"))
+        assertTrue(picker.contains("var selectedPoint by rememberSaveable(target, stateSaver = geoPointSaver)"))
         assertTrue(picker.contains("val dirty = selectedPoint != initialPoint"))
         assertTrue(picker.contains("UnsavedChangesGuard("))
         assertTrue(picker.contains("exitGuard.requestExit(dirty, onBack)"))

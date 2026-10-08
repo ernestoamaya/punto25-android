@@ -80,7 +80,9 @@ class UnsavedChangesGuardTest {
         assertEquals(baseline, changed.copy(notes = baseline.notes))
 
         val app = projectSource("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
-        assertTrue(app.contains("var orderDraftBaseline by remember { mutableStateOf<OrderDraft?>(null) }"))
+        assertTrue(app.contains("val controller = rememberSaveable("))
+        assertTrue(app.contains("saver = mandadosControllerSaver(context.applicationContext)"))
+        assertTrue(app.contains("var orderDraftBaseline by rememberSaveable(saver = orderDraftBaselineStateSaver)"))
         assertTrue(app.contains("controller.resetDraftForCategory(category)\n                orderDraftBaseline = controller.draft"))
         assertTrue(app.contains("baseline = orderDraftBaseline ?: controller.draft"))
         assertTrue(app.contains("val dirty = d != baseline"))
