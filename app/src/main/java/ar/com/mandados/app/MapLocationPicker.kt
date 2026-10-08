@@ -48,13 +48,15 @@ internal fun LocationPickerScreen(
 ) {
     val context = LocalContext.current
     val fused = remember { LocationServices.getFusedLocationProviderClient(context) }
-    val initial = mapPointForTarget(c.draft, target) ?: DEFAULT_MAP_POINT
-    var selectedPoint by remember(target) { mutableStateOf(initial) }
+    val initialPoint = remember(target) { mapPointForTarget(c.draft, target) ?: DEFAULT_MAP_POINT }
+    var selectedPoint by remember(target) { mutableStateOf(initialPoint) }
+    val dirty = selectedPoint != initialPoint
+    val exitGuard = rememberUnsavedChangesGuardState()
 
     val mapState = rememberMapState(
         baseStyle = BaseStyle.Uri(OPENFREEMAP_LIBERTY_STYLE),
         initialCameraPosition = CameraPosition(
-            target = Position(longitude = initial.longitude, latitude = initial.latitude),
+            target = Position(longitude = initialPoint.longitude, latitude = initialPoint.latitude),
             zoom = 15.0
         )
     ) {
@@ -131,7 +133,13 @@ internal fun LocationPickerScreen(
         }
     }
 
-    Page("Marcar ubicación", onBack) {
+    UnsavedChangesGuard(
+        dirty = dirty,
+        state = exitGuard,
+        onBack = onBack
+    )
+
+    Page("Marcar ubicación", { exitGuard.requestExit(dirty, onBack) }) {
         Text("Tocá el mapa para mover el pin.")
         Spacer(Modifier.height(10.dp))
 
