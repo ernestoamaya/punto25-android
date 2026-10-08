@@ -89,9 +89,10 @@ internal fun orderLocationsViewport(points: List<OrderLocationPoint>): OrderLoca
 
 internal fun orderPresentationLines(
     order: LocalOrder,
+    includeLocationDetails: Boolean = true,
     zoneLabel: (String) -> String? = { id -> id.takeIf(String::isNotBlank) }
 ): List<OrderPresentationLine> {
-    val locationKinds = orderLocationPoints(order).associateBy { it.kind }
+    val locationKinds = if (includeLocationDetails) orderLocationPoints(order).associateBy { it.kind } else emptyMap()
     val lines = mutableListOf<OrderPresentationLine>()
 
     fun add(label: String, value: String?) {
@@ -110,12 +111,14 @@ internal fun orderPresentationLines(
     add("Tipo", serviceCategoryPresentationLabel(order.category))
     when (order.serviceType) {
         ServiceType.DELIVERY -> {
-            add("Retiro", addressOrLocation(order.originAddress, OrderLocationKind.ORIGIN))
-            add("Referencia retiro", order.originReference)
-            add("Zona retiro", zone(order.originZoneId))
-            add("Entrega", addressOrLocation(order.destinationAddress, OrderLocationKind.DESTINATION))
-            add("Referencia entrega", order.destinationReference)
-            add("Zona entrega", zone(order.destinationZoneId))
+            if (includeLocationDetails) {
+                add("Retiro", addressOrLocation(order.originAddress, OrderLocationKind.ORIGIN))
+                add("Referencia retiro", order.originReference)
+                add("Zona retiro", zone(order.originZoneId))
+                add("Entrega", addressOrLocation(order.destinationAddress, OrderLocationKind.DESTINATION))
+                add("Referencia entrega", order.destinationReference)
+                add("Zona entrega", zone(order.destinationZoneId))
+            }
             add("Contenido", order.carriedItem)
         }
         ServiceType.SHOPPING -> {
@@ -123,30 +126,32 @@ internal fun orderPresentationLines(
             add("Descripción", order.purchaseDescription)
             if (order.purchaseMaxAmount > 0) add("Presupuesto máximo", presentationMoney(order.purchaseMaxAmount))
 
-            val store = listOf(order.storeName, order.storeAddress)
-                .map(String::trim)
-                .filter(String::isNotBlank)
-                .joinToString(" · ")
-            add(
-                "Comercio",
-                store.ifBlank {
-                    if (OrderLocationKind.STORE in locationKinds) "Ubicación marcada" else ""
+            if (includeLocationDetails) {
+                val store = listOf(order.storeName, order.storeAddress)
+                    .map(String::trim)
+                    .filter(String::isNotBlank)
+                    .joinToString(" · ")
+                add(
+                    "Comercio",
+                    store.ifBlank {
+                        if (OrderLocationKind.STORE in locationKinds) "Ubicación marcada" else ""
+                    }
+                )
+                add("Zona comercio", zone(order.storeZoneId))
+
+                if (
+                    order.prePickupAddress.isNotBlank() || order.prePickupReference.isNotBlank() ||
+                    order.prePickupZoneId.isNotBlank() || OrderLocationKind.PRE_PICKUP in locationKinds
+                ) {
+                    add("Retiro previo", addressOrLocation(order.prePickupAddress, OrderLocationKind.PRE_PICKUP))
+                    add("Referencia retiro previo", order.prePickupReference)
+                    add("Zona retiro previo", zone(order.prePickupZoneId))
                 }
-            )
-            add("Zona comercio", zone(order.storeZoneId))
 
-            if (
-                order.prePickupAddress.isNotBlank() || order.prePickupReference.isNotBlank() ||
-                order.prePickupZoneId.isNotBlank() || OrderLocationKind.PRE_PICKUP in locationKinds
-            ) {
-                add("Retiro previo", addressOrLocation(order.prePickupAddress, OrderLocationKind.PRE_PICKUP))
-                add("Referencia retiro previo", order.prePickupReference)
-                add("Zona retiro previo", zone(order.prePickupZoneId))
+                add("Entrega", addressOrLocation(order.destinationAddress, OrderLocationKind.DESTINATION))
+                add("Referencia entrega", order.destinationReference)
+                add("Zona entrega", zone(order.destinationZoneId))
             }
-
-            add("Entrega", addressOrLocation(order.destinationAddress, OrderLocationKind.DESTINATION))
-            add("Referencia entrega", order.destinationReference)
-            add("Zona entrega", zone(order.destinationZoneId))
             add("Pago compra", purchasePaymentPresentationLabel(order.purchasePayment))
         }
     }
