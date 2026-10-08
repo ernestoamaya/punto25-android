@@ -214,7 +214,10 @@ private fun MandadosNavigation(controller: MandadosController) {
     } else when (screen) {
         Screen.REGISTER -> RegisterScreen(
             controller,
-            onContinue = { screen = Screen.WHATSAPP_VERIFY },
+            onContinue = {
+                if (controller.confirmRegistration()) screen = Screen.HOME
+                else Toast.makeText(context, "No se pudo confirmar la identidad Google. Volvé a intentar.", Toast.LENGTH_LONG).show()
+            },
             onRider = { screen = Screen.RIDER_ACCESS },
             onAdmin = {
                 adminSession.clear()
@@ -609,7 +612,7 @@ private fun RegisterScreen(c: MandadosController, onContinue: () -> Unit, onRide
                         Text(if (busy) "CONECTANDO…" else "CONTINUAR  →", fontWeight = FontWeight.ExtraBold)
                     }
                     Text(
-                        "Tu cuenta se protege con Google y verificamos tu WhatsApp antes del primer pedido.",
+                        "Tu cuenta se protege con Google. El teléfono declarado no se considera verificado por WhatsApp.",
                         color = Color.White.copy(alpha = 0.64f),
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(top = 10.dp)

@@ -89,9 +89,15 @@ class MandadosController(context: Context) {
         reconcileCurrentCustomerOrderIdentity()
     }
 
-    fun registerPending(c: Customer) { pendingCustomer = c }
+    fun registerPending(c: Customer) {
+        pendingCustomer = c.copy(
+            accountId = "", googleVerified = false, googleEmail = "",
+            whatsappVerified = false, whatsappVerifiedAt = null
+        )
+    }
 
     fun applyGoogleIdentity(uid: String, email: String?, displayName: String?) {
+        if (uid.isBlank() || !GoogleAuthIntegration.isConfigured() || GoogleAuthIntegration.currentUid(appContext) != uid) return
         val pending = pendingCustomer ?: return
         pendingCustomer = pending.copy(
             name = pending.name.ifBlank { displayName.orEmpty() },
@@ -144,7 +150,10 @@ class MandadosController(context: Context) {
 
     fun confirmRegistration(): Boolean {
         val pending = pendingCustomer ?: return false
-        if (!pending.whatsappVerified) return false
+        if (!canConfirmCustomerRegistration(
+                pending, GoogleAuthIntegration.isConfigured(),
+                GoogleAuthIntegration.currentUid(appContext), BuildConfig.DEBUG
+            )) return false
         customer = pending
         reconcileCurrentCustomerOrderIdentity()
         store.saveCustomer(pending)

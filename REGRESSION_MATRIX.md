@@ -6,6 +6,14 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 |---|---|---|
 | REG-IDENTITY-001 | Un Cliente nunca obtiene pedidos de otro Cliente por coincidencias débiles. | `CustomerOrderOwnershipTest.differentCustomerNeverMatchesEvenWithSameVisibleName` |
 | REG-HISTORY-001 | Los alias Alpha `CLI-/DEV-` recuperan historial sólo cuando corresponden al mismo teléfono verificado. | `CustomerOrderOwnershipTest.legacyCliIdMatchesVerifiedCurrentCustomer`, `previousDevIdMatchesVerifiedGoogleCustomerWithSameNumber` |
+| REG-CUSTOMER-REG-GOOGLE-001 | Google válido confirma alta con WhatsApp no verificado. | `CustomerRegistrationPolicyTest.googleRegistrationWithoutWhatsappSucceedsAndDoesNotMutateVerification` |
+| REG-CUSTOMER-REG-WA-STATE-001 | Alta sin WhatsApp no falsifica verificación ni timestamp. | `CustomerRegistrationPolicyTest.debugRegistrationPersistsUnverifiedPhoneAcrossControllerRecreation` |
+| REG-CUSTOMER-REG-WA-AVAIL-001 | Backend/Firebase no habilitan WhatsApp sin bandera explícita. | `CustomerRegistrationPolicyTest.whatsappAvailabilityIsExplicitAndDisabledByDefault` |
+| REG-CUSTOMER-REG-WA-OPTIONAL-001 | La verificación WhatsApp no bloquea alta válida. | `CustomerRegistrationPolicyTest.googleRegistrationWithoutWhatsappSucceedsAndDoesNotMutateVerification` |
+| REG-CUSTOMER-REG-IDENTITY-001 | Teléfono no verificado no atribuye historial CLI-/DEV-. | `CustomerRegistrationPolicyTest.unverifiedGoogleCustomerNeverClaimsLegacyOrders` |
+| REG-CUSTOMER-REG-ISOLATION-001 | Cliente A no obtiene pedidos de B por coincidencias débiles. | `CustomerRegistrationPolicyTest.unverifiedGoogleCustomerNeverClaimsLegacyOrders`, `CustomerOrderOwnershipTest.differentCustomerNeverMatchesEvenWithSameVisibleName` |
+| REG-CUSTOMER-REG-PERSIST-001 | Registro no verificado persiste tras recreación del controlador. | `CustomerRegistrationPolicyTest.googleUnverifiedCustomerPersistsAcrossControllerRecreationWithoutLegacyClaims`, `debugRegistrationPersistsUnverifiedPhoneAcrossControllerRecreation` |
+| REG-CUSTOMER-REG-GOOGLE-REQUIRED-001 | Sin UID Firebase coincidente no se confirma Google; DEBUG sólo sin configuración Google. | `CustomerRegistrationPolicyTest.googleRequiresExactLiveFirebaseUidAndNeverAcceptsForgedIdentity`, `debugFallbackOnlyWhenGoogleNotConfigured` |
 | REG-PAY-001 | Un pago confirmado queda fuera de los estados pendientes de transferencia. | `PaymentTransferPolicyTest.confirmedIsCompletedNotPending` |
 | REG-PAY-AUTH-001 | Un Repartidor ajeno no puede acceder, confirmar ni reportar una transferencia. | `PaymentTransferPolicyTest.wrongRiderCannotAccessTransfer`, `wrongRiderCannotConfirm`, `wrongRiderCannotReportMissingAccreditation` |
 | REG-PAY-AUTH-002 | Conocer el RID asignado no autoriza a leer el comprobante ni confirmar/reportar un pago sin la sesión Rider autenticada coincidente. | `RiderSessionAndTipIntegrationTest.REG-PAY-AUTH-002…` |

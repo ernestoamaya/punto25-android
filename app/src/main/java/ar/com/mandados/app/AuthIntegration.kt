@@ -78,6 +78,12 @@ internal object GoogleAuthIntegration {
         GoogleIdentity(user.uid, user.email, user.displayName)
     }
 
+    fun currentUid(context: Context): String? {
+        if (!isConfigured()) return null
+        val app = runCatching { ensureFirebase(context) }.getOrNull() ?: return null
+        return FirebaseAuth.getInstance(app).currentUser?.uid?.takeIf { it.isNotBlank() }
+    }
+
     fun signOut(context: Context) {
         if (!isConfigured()) return
         val app = runCatching { ensureFirebase(context) }.getOrNull() ?: return
@@ -132,9 +138,11 @@ internal object AdminAccessApi {
 
 internal object WhatsAppVerificationApi {
     fun isConfigured(): Boolean =
-        BuildConfig.PUNTO25_API_BASE_URL.isNotBlank() && GoogleAuthIntegration.isConfigured()
+        BuildConfig.WHATSAPP_VERIFICATION_ENABLED &&
+            BuildConfig.PUNTO25_API_BASE_URL.isNotBlank() && GoogleAuthIntegration.isConfigured()
 
     suspend fun start(context: Context): Result<WhatsAppVerificationChallenge> = runCatching {
+        check(isConfigured()) { "La verificación WhatsApp está deshabilitada." }
         val token = GoogleAuthIntegration.currentIdToken(context) ?: error("No hay una sesión Google válida.")
         val json = request(
             method = "POST",
@@ -149,6 +157,7 @@ internal object WhatsAppVerificationApi {
     }
 
     suspend fun status(context: Context, code: String): Result<WhatsAppVerificationStatus> = runCatching {
+        check(isConfigured()) { "La verificación WhatsApp está deshabilitada." }
         val token = GoogleAuthIntegration.currentIdToken(context) ?: error("No hay una sesión Google válida.")
         val json = request(
             method = "GET",
