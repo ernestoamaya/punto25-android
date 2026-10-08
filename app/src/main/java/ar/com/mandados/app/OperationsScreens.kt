@@ -774,7 +774,6 @@ private fun DocumentReviewCard(
     }
 }
 
-
 @Composable
 private fun LocalDocumentImage(uriString: String) {
     val context = LocalContext.current
@@ -791,7 +790,33 @@ internal fun RiderDashboardScreen(c: MandadosController, riderId: String?, onBac
     riderId?.let { c.isRiderCurrentlyAvailable(it) }
     val rider = c.rider(riderId)
     var section by rememberSaveable { mutableStateOf(RiderSection.MENU) }
-    BackHandler(enabled = section != RiderSection.MENU) { section = RiderSection.MENU }
+    var profileEdit by remember(riderId) {
+        mutableStateOf(RiderProfileEditSnapshot(alias = rider?.transferAlias.orEmpty()))
+    }
+    val profileDirty = rider?.let { isRiderProfileEditDirty(it.transferAlias, profileEdit) } ?: false
+    val profileExitGuard = rememberUnsavedChangesGuardState()
+
+    fun requestSection(next: RiderSection) {
+        if (section == RiderSection.PROFILE) {
+            profileExitGuard.requestExit(profileDirty) { section = next }
+        } else {
+            section = next
+        }
+    }
+
+    BackHandler(enabled = section != RiderSection.MENU && section != RiderSection.PROFILE) {
+        section = RiderSection.MENU
+    }
+
+    if (section == RiderSection.PROFILE && rider != null) {
+        UnsavedChangesGuard(
+            dirty = profileDirty,
+            state = profileExitGuard,
+            onBack = { section = RiderSection.MENU },
+            onDiscard = { profileEdit = RiderProfileEditSnapshot(alias = rider.transferAlias) },
+            enabled = c.hasAuthenticatedRiderSession(rider.id)
+        )
+    }
 
     val title = when (section) {
         RiderSection.MENU -> "Punto25 · Repartidor"
@@ -808,7 +833,7 @@ internal fun RiderDashboardScreen(c: MandadosController, riderId: String?, onBac
         RiderSection.SUPPORT -> "Soporte"
     }
 
-    OpsPage(title, if (section == RiderSection.MENU) onBack else ({ section = RiderSection.MENU })) {
+    OpsPage(title, if (section == RiderSection.MENU) onBack else ({ requestSection(RiderSection.MENU) })) {
         if (rider == null) {
             AssistCard("Repartidor no encontrado.")
             return@OpsPage
@@ -823,7 +848,13 @@ internal fun RiderDashboardScreen(c: MandadosController, riderId: String?, onBac
             RiderSection.BALANCE -> RiderBalance(c, rider)
             RiderSection.BALANCES -> RiderBalances(c, rider)
             RiderSection.PENDING_TIPS -> RiderPendingTips(c, rider)
-            RiderSection.PROFILE -> RiderProfileView(c, rider) { section = it }
+            RiderSection.PROFILE -> RiderProfileView(
+                c = c,
+                rider = rider,
+                edit = profileEdit,
+                onEdit = { profileEdit = it },
+                onSection = ::requestSection
+            )
             RiderSection.PERMISSIONS -> PermissionsScreen()
             RiderSection.SUPPORT -> SupportScreen(c)
         }
@@ -1164,16 +1195,16 @@ private fun RiderTransfers(c: MandadosController, rider: RiderProfile) {
 
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FilterChip(
-  selected = !completed,
-  onClick = { completed = false },
-  label = { Text("PENDIENTES (${pending.size})") },
-  modifier = Modifier.weight(1f)
+            selected = !completed,
+            onClick = { completed = false },
+            label = { Text("PENDIENTES (${pending.size})") },
+            modifier = Modifier.weight(1f)
         )
         FilterChip(
-  selected = completed,
-  onClick = { completed = true },
-  label = { Text("COMPLETADAS (${completedItems.size})") },
-  modifier = Modifier.weight(1f)
+            selected = completed,
+            onClick = { completed = true },
+            label = { Text("COMPLETADAS (${completedItems.size})") },
+            modifier = Modifier.weight(1f)
         )
     }
 
@@ -1190,22 +1221,22 @@ private fun RiderTransfers(c: MandadosController, rider: RiderProfile) {
         val order = authenticatedAssignedRiderOrder(c, rider.id, payment.orderId) ?: return@forEach
         var expanded by rememberSaveable(payment.id) { mutableStateOf(false) }
         Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-  Column(Modifier.padding(12.dp)) {
-      Text(order.id, fontWeight = FontWeight.Bold)
-      Text(order.customerName)
-      ReportMetric("Importe esperado", money(payment.expectedAmount), true)
-      Text(transferPaymentStatusLabel(payment.status), color = MaterialTheme.colorScheme.primary)
-      Text("Actualizado: ${payment.updatedAt}", style = MaterialTheme.typography.bodySmall)
-      Text("Comprobante: ${if (payment.proofUri.isNullOrBlank()) "No" else "Sí"}", style = MaterialTheme.typography.bodySmall)
-      OutlinedButton(
-          onClick = { expanded = !expanded },
-          modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
-      ) { Text(if (expanded) "OCULTAR DETALLE" else "VER DETALLE DEL PEDIDO") }
-      if (expanded) {
-          StructuredOrderPresentation(c, order, Modifier.padding(top = 6.dp))
-          PaymentSummary(c, order, rider = rider)
-      }
-  }
+            Column(Modifier.padding(12.dp)) {
+                Text(order.id, fontWeight = FontWeight.Bold)
+                Text(order.customerName)
+                ReportMetric("Importe esperado", money(payment.expectedAmount), true)
+                Text(transferPaymentStatusLabel(payment.status), color = MaterialTheme.colorScheme.primary)
+                Text("Actualizado: ${payment.updatedAt}", style = MaterialTheme.typography.bodySmall)
+                Text("Comprobante: ${if (payment.proofUri.isNullOrBlank()) "No" else "Sí"}", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(
+                    onClick = { expanded = !expanded },
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                ) { Text(if (expanded) "OCULTAR DETALLE" else "VER DETALLE DEL PEDIDO") }
+                if (expanded) {
+                    StructuredOrderPresentation(c, order, Modifier.padding(top = 6.dp))
+                    PaymentSummary(c, order, rider = rider)
+                }
+            }
         }
     }
 }
@@ -1335,9 +1366,15 @@ private fun RiderShiftsLegacy(c: MandadosController, rider: RiderProfile) {
 }
 
 @Composable
-private fun RiderProfileView(c: MandadosController, rider: RiderProfile, onSection: (RiderSection) -> Unit) {
-    var alias by remember(rider.id, rider.transferAlias) { mutableStateOf(rider.transferAlias) }
-    var aliasMessage by remember { mutableStateOf("") }
+private fun RiderProfileView(
+    c: MandadosController,
+    rider: RiderProfile,
+    edit: RiderProfileEditSnapshot,
+    onEdit: (RiderProfileEditSnapshot) -> Unit,
+    onSection: (RiderSection) -> Unit
+) {
+    var aliasMessage by remember(rider.id) { mutableStateOf("") }
+    var passwordMessage by remember(rider.id) { mutableStateOf("") }
 
     Text(rider.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
     Text(rider.id)
@@ -1348,45 +1385,63 @@ private fun RiderProfileView(c: MandadosController, rider: RiderProfile, onSecti
 
     SectionTitle("Datos de cobro")
     OutlinedTextField(
-        value = alias,
-        onValueChange = { alias = it.trim().take(80); aliasMessage = "" },
+        value = edit.alias,
+        onValueChange = {
+            onEdit(edit.copy(alias = it.trim().take(80)))
+            aliasMessage = ""
+        },
         label = { Text("Alias de transferencia") },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true
     )
     Button(
         onClick = {
-            if (c.updateRiderTransferAlias(rider.id, alias)) aliasMessage = "Alias actualizado."
+            aliasMessage = if (c.updateRiderTransferAlias(rider.id, edit.alias)) {
+                "Alias actualizado."
+            } else {
+                "No se pudo actualizar el alias."
+            }
         },
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
     ) { Text("GUARDAR ALIAS") }
-    if (aliasMessage.isNotBlank()) Text(aliasMessage, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+    if (aliasMessage.isNotBlank()) {
+        Text(
+            aliasMessage,
+            color = if (aliasMessage == "Alias actualizado.") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
     AssistCard("El alias sólo puede modificarse desde el perfil del propio Repartidor. Administración puede visualizarlo para conciliaciones, pero no cambiarlo.")
 
     SectionTitle("Seguridad de acceso")
-    var currentPassword by remember(rider.id) { mutableStateOf("") }
-    var newPassword by remember(rider.id) { mutableStateOf("") }
-    var confirmPassword by remember(rider.id) { mutableStateOf("") }
-    var passwordMessage by remember(rider.id) { mutableStateOf("") }
     OutlinedTextField(
-        currentPassword,
-        { currentPassword = it; passwordMessage = "" },
+        edit.currentPassword,
+        {
+            onEdit(edit.copy(currentPassword = it))
+            passwordMessage = ""
+        },
         label = { Text("Contraseña actual") },
         visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
         singleLine = true,
         modifier = Modifier.fillMaxWidth()
     )
     OutlinedTextField(
-        newPassword,
-        { newPassword = it; passwordMessage = "" },
+        edit.newPassword,
+        {
+            onEdit(edit.copy(newPassword = it))
+            passwordMessage = ""
+        },
         label = { Text("Nueva contraseña") },
         visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
         singleLine = true,
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
     )
     OutlinedTextField(
-        confirmPassword,
-        { confirmPassword = it; passwordMessage = "" },
+        edit.confirmPassword,
+        {
+            onEdit(edit.copy(confirmPassword = it))
+            passwordMessage = ""
+        },
         label = { Text("Repetir nueva contraseña") },
         visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
         singleLine = true,
@@ -1395,10 +1450,10 @@ private fun RiderProfileView(c: MandadosController, rider: RiderProfile, onSecti
     Button(
         onClick = {
             passwordMessage = when {
-                newPassword != confirmPassword -> "Las nuevas contraseñas no coinciden."
-                !c.passwordIsStrong(newPassword) -> "Usá al menos 8 caracteres, con mayúscula, minúscula y número."
-                c.changeRiderPassword(rider.id, currentPassword, newPassword) -> {
-                    currentPassword = ""; newPassword = ""; confirmPassword = ""
+                edit.newPassword != edit.confirmPassword -> "Las nuevas contraseñas no coinciden."
+                !c.passwordIsStrong(edit.newPassword) -> "Usá al menos 8 caracteres, con mayúscula, minúscula y número."
+                c.changeRiderPassword(rider.id, edit.currentPassword, edit.newPassword) -> {
+                    onEdit(edit.copy(currentPassword = "", newPassword = "", confirmPassword = ""))
                     "Contraseña actualizada."
                 }
                 else -> "La contraseña actual no es correcta."
@@ -1628,13 +1683,13 @@ internal fun AdminShiftsLegacyScreen(c: MandadosController, onBack: () -> Unit) 
                             }
 
                             reservations.forEach { reservation ->
-                                val rider = c.rider(reservation.riderId)
+                                val reservationRider = c.rider(reservation.riderId)
                                 Row(
                                     Modifier.fillMaxWidth().padding(top = 5.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        rider?.let { it.name + " · " + it.id } ?: reservation.riderId,
+                                        reservationRider?.let { it.name + " · " + it.id } ?: reservation.riderId,
                                         Modifier.weight(1f)
                                     )
                                     if (!finished) {
@@ -2062,7 +2117,6 @@ private fun LegalPdfEditor(c: MandadosController, type: LegalDocumentType, onDis
     }
 }
 
-
 @Composable
 private fun PermissionsScreen() {
     val context = LocalContext.current
@@ -2115,38 +2169,38 @@ private fun PaymentSummary(c: MandadosController, order: LocalOrder, rider: Ride
 
     if (rider != null && isTransfer && riderCanAccess) {
         payment.proofUri?.takeIf { it.isNotBlank() }?.let { proofUri ->
-  OutlinedButton(
-      onClick = { showProof = !showProof },
-      modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
-  ) { Text(if (showProof) "OCULTAR COMPROBANTE" else "VER COMPROBANTE") }
-  if (showProof) LocalDocumentImage(proofUri)
+            OutlinedButton(
+                onClick = { showProof = !showProof },
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+            ) { Text(if (showProof) "OCULTAR COMPROBANTE" else "VER COMPROBANTE") }
+            if (showProof) LocalDocumentImage(proofUri)
         }
 
         if (payment.status == PaymentStatus.PENDING) {
-  AssistCard("Esperando que el Cliente informe la transferencia.")
+            AssistCard("Esperando que el Cliente informe la transferencia.")
         } else if (payment.status in transferAttentionStatuses) {
-  if (c.config.paymentConfig.transferProofRequired && payment.proofUri.isNullOrBlank()) {
-      AssistCard("Esperando comprobante. La configuración actual exige comprobante antes de confirmar la acreditación.")
-  }
-  Button(
-      onClick = { c.confirmPaymentByRider(order.id, rider.id) },
-      enabled = c.riderCanConfirmTransfer(order.id, rider.id),
-      modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
-  ) { Text("CONFIRMAR ACREDITACIÓN") }
-  OutlinedButton(
-      onClick = { c.reportPaymentProblem(order.id, rider.id) },
-      enabled = c.riderCanReportTransfer(order.id, rider.id),
-      modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
-  ) { Text("NO VEO ACREDITADO") }
-  if (payment.status == PaymentStatus.IN_REVIEW) {
-      Text(
-          "El pago sigue pendiente y marcado para revisión. Podés confirmarlo más adelante si verificás la acreditación.",
-          style = MaterialTheme.typography.bodySmall,
-          modifier = Modifier.padding(top = 4.dp)
-      )
-  }
+            if (c.config.paymentConfig.transferProofRequired && payment.proofUri.isNullOrBlank()) {
+                AssistCard("Esperando comprobante. La configuración actual exige comprobante antes de confirmar la acreditación.")
+            }
+            Button(
+                onClick = { c.confirmPaymentByRider(order.id, rider.id) },
+                enabled = c.riderCanConfirmTransfer(order.id, rider.id),
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+            ) { Text("CONFIRMAR ACREDITACIÓN") }
+            OutlinedButton(
+                onClick = { c.reportPaymentProblem(order.id, rider.id) },
+                enabled = c.riderCanReportTransfer(order.id, rider.id),
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+            ) { Text("NO VEO ACREDITADO") }
+            if (payment.status == PaymentStatus.IN_REVIEW) {
+                Text(
+                    "El pago sigue pendiente y marcado para revisión. Podés confirmarlo más adelante si verificás la acreditación.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
         } else if (payment.status == PaymentStatus.CONFIRMED) {
-  Text("Acreditación confirmada.", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            Text("Acreditación confirmada.", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -2202,7 +2256,6 @@ private fun DatePickerPopup(current: String?, onDismiss: () -> Unit, onSelected:
         )
     }
 }
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2671,7 +2724,6 @@ private fun dial(context: android.content.Context, rawPhone: String) {
     val digits = rawPhone.filter(Char::isDigit)
     runCatching { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$digits"))) }
 }
-
 
 @Composable
 internal fun CustomerProfileScreen(c: MandadosController, onBack: () -> Unit, onSupport: () -> Unit) {
