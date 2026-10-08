@@ -40,6 +40,25 @@ class OrderLocationPresentationTest {
     }
 
     @Test
+    fun `REG-ORDER-LOCATION-PRESENTATION-004 Rider restringido usa presentacion estructurada y conserva auth`() {
+        val restricted = projectFile("app/src/main/java/ar/com/mandados/app/RiderRestrictedWorkspaceScreen.kt")
+        val presentation = projectFile("app/src/main/java/ar/com/mandados/app/OrderLocationsMapScreen.kt")
+        val access = projectFile("app/src/main/java/ar/com/mandados/app/RiderAccessPolicy.kt")
+
+        assertFalse(restricted.contains("Text(order.detail"))
+        assertFalse(restricted.contains("order.detail"))
+        assertFalse(restricted.contains("maps.google.com", ignoreCase = true))
+        assertFalse(restricted.contains("Uri.parse("))
+        assertFalse(restricted.contains("Regex("))
+        assertTrue(restricted.contains("RiderStructuredOrderPresentation(c, order)"))
+        assertTrue(restricted.contains("if (rider == null || !c.hasAuthenticatedRiderSession(riderId))"))
+        assertTrue(restricted.contains("val activeOrders = authenticatedRiderActiveOrders(c, rider.id)"))
+        assertTrue(presentation.contains("authenticatedRiderOrderLocations(c, assignedRiderId, order.id)"))
+        assertTrue(access.contains("authenticatedAssignedRiderOrder"))
+        assertTrue(access.contains("it.assignedRiderId == riderId"))
+    }
+
+    @Test
     fun `REG-ORDER-LOCATION-PRESENTATION-003 Admin usa presentacion estructurada y controles read only`() {
         val operations = projectFile("app/src/main/java/ar/com/mandados/app/OperationsScreens.kt")
         val presentation = projectFile("app/src/main/java/ar/com/mandados/app/OrderLocationsMapScreen.kt")
