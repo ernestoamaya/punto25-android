@@ -75,6 +75,39 @@ class CustomerRegistrationPolicyTest {
         assertNull(restored.whatsappVerifiedAt)
     }
 
+
+    @Test fun googleUnverifiedCustomerPersistsAcrossControllerRecreationWithoutLegacyClaims() {
+        val context = RuntimeEnvironment.getApplication()
+        val googleCustomer = pending("G-firebase-uid-42", google = true, wa = false, at = null)
+
+        // Firebase remote sign-in is intentionally not mocked: the pure policy verifies
+        // that the persisted identity is bound to the exact authenticated UID.
+        assertTrue(canConfirmCustomerRegistration(googleCustomer, true, "firebase-uid-42", false))
+        assertFalse(canConfirmCustomerRegistration(googleCustomer, true, "another-uid", false))
+
+        LocalStore(context).saveCustomer(googleCustomer)
+        val restored = MandadosController(context).customer!!
+        assertEquals("G-firebase-uid-42", restored.accountId)
+        assertTrue(restored.googleVerified)
+        assertFalse(restored.whatsappVerified)
+        assertNull(restored.whatsappVerifiedAt)
+        assertEquals("2345", restored.areaCode)
+        assertEquals("513240", restored.subscriber)
+        assertEquals(phone, restored.nationalNumber)
+        assertTrue(canConfirmCustomerRegistration(restored, true, "firebase-uid-42", false))
+
+        fun legacyOrder(id: String) = LocalOrder(
+            id = "P25-LEGACY", createdAt = "03/10/2026", serviceType = ServiceType.DELIVERY,
+            status = OrderStatus.PENDING, customerName = restored.name,
+            customerPhone = restored.displayPhone, detail = "",
+            baseAmount = 0, baseZoneName = "", prePickupAmount = 0,
+            rainAmount = 0, totalAmount = 0, whatsappMessage = "", customerId = id
+        )
+        assertFalse(orderBelongsToCustomer(legacyOrder("CLI-$phone"), restored))
+        assertFalse(orderBelongsToCustomer(legacyOrder("DEV-$phone"), restored))
+        assertTrue(orderBelongsToCustomer(legacyOrder("G-firebase-uid-42"), restored))
+    }
+
     @Test fun whatsappAvailabilityIsExplicitAndDisabledByDefault() {
         assertFalse(BuildConfig.WHATSAPP_VERIFICATION_ENABLED)
         assertFalse(WhatsAppVerificationApi.isConfigured())
