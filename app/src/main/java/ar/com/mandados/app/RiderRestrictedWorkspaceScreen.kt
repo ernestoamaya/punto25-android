@@ -84,7 +84,7 @@ internal fun RiderRestrictedWorkspaceScreen(
                         Column(Modifier.padding(12.dp)) {
                             Text(order.id, fontWeight = FontWeight.Bold)
                             Text(restrictedOrderStatus(order.status))
-                            Text(order.detail, style = MaterialTheme.typography.bodySmall)
+                            RiderStructuredOrderPresentation(c, order)
                             if (continuation.allowed) {
                                 when (order.status) {
                                     OrderStatus.PENDING, OrderStatus.ACCEPTED -> Button(
