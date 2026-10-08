@@ -326,9 +326,17 @@ class MandadosController(context: Context) {
             deliveryPayment = draft.deliveryPayment,
             notes = draft.notes
         )
-        orders = listOf(order) + orders
-        store.saveOrders(orders)
-        if (order.operationMode == OperationMode.MULTI_RIDER) ensurePaymentRecord(order)
+        val nextOrders = listOf(order) + orders
+        if (order.operationMode == OperationMode.MULTI_RIDER) {
+            val payment = paymentRecordSynchronizedToOrder(order, existing = null, timestamp = created)
+            val nextPayments = payments + payment
+            store.saveOrdersAndPayments(nextOrders, nextPayments)
+            orders = nextOrders
+            payments = nextPayments
+        } else {
+            store.saveOrders(nextOrders)
+            orders = nextOrders
+        }
         return OrderCreationResult.Created(order)
     }
 
@@ -398,9 +406,24 @@ class MandadosController(context: Context) {
         val o = order(orderId) ?: return false
         if (!canAssignRider(o)) return false
         if (o.assignedRiderId == riderId) return true
+        val paymentMatches = payments.filter { it.orderId == orderId }
+        if (paymentMatches.size > 1) return false
+        val existingPayment = paymentMatches.singleOrNull()
+
+        if (riderId != null) {
+            val target = rider(riderId) ?: return false
+            if (!riderAccountEligibility(target).allowed) return false
+            if (!riderHasActiveShiftNow(riderId)) return false
+            if (!riderHasCapacity(target, excludingOrderId = orderId)) return false
+        }
+
+        val candidate = o.copy(assignedRiderId = riderId)
+        if (isCommittedRiderTransferAssignmentLocked(o, riderId, existingPayment)) return false
+        val mutation = evaluateOrderPaymentMutation(o, candidate, existingPayment)
+        if (mutation == OrderPaymentMutationAction.DENY) return false
+
         val now = nowText()
         val events = o.events.toMutableList()
-
         o.assignedRiderId?.let { old ->
             events += OrderEvent(
                 type = OrderEventType.RIDER_UNASSIGNED,
@@ -411,12 +434,7 @@ class MandadosController(context: Context) {
                 actor = "ADMIN"
             )
         }
-
         if (riderId != null) {
-            val target = rider(riderId) ?: return false
-            if (!riderAccountEligibility(target).allowed) return false
-            if (!riderHasActiveShiftNow(riderId)) return false
-            if (!riderHasCapacity(target, excludingOrderId = orderId)) return false
             events += OrderEvent(
                 type = OrderEventType.RIDER_ASSIGNED,
                 at = now,
@@ -426,10 +444,15 @@ class MandadosController(context: Context) {
                 actor = "ADMIN"
             )
         }
-
-        val updated = o.copy(assignedRiderId = riderId, events = events)
-        updateOrder(updated)
-        ensurePaymentRecord(updated)
+        val updated = candidate.copy(events = events)
+        when (mutation) {
+            OrderPaymentMutationAction.DENY -> return false
+            OrderPaymentMutationAction.ORDER_ONLY -> updateOrder(updated)
+            OrderPaymentMutationAction.ORDER_AND_PAYMENT -> {
+                val payment = paymentRecordSynchronizedToOrder(updated, existingPayment, now)
+                persistOrderAndPayment(updated, payment)
+            }
+        }
         return true
     }
 
@@ -447,6 +470,10 @@ class MandadosController(context: Context) {
         if (o.status != OrderStatus.PENDING || o.assignedRiderId != null) {
             return RiderEligibilityDecision.denied(RiderDenialReason.ORDER_NOT_AVAILABLE)
         }
+        val paymentMatches = payments.filter { it.orderId == orderId }
+        if (paymentMatches.size != 1 || !isCleanPendingPaymentForTake(o, paymentMatches.single())) {
+            return RiderEligibilityDecision.denied(RiderDenialReason.ORDER_NOT_AVAILABLE)
+        }
         return RiderEligibilityDecision.ALLOWED
     }
 
@@ -454,6 +481,11 @@ class MandadosController(context: Context) {
         val decision = takeOrderDecision(orderId, riderId)
         if (!decision.allowed) return decision
         val o = order(orderId) ?: return RiderEligibilityDecision.denied(RiderDenialReason.ORDER_NOT_AVAILABLE)
+        val existingPayment = payments.filter { it.orderId == orderId }.singleOrNull()
+            ?: return RiderEligibilityDecision.denied(RiderDenialReason.ORDER_NOT_AVAILABLE)
+        if (!isCleanPendingPaymentForTake(o, existingPayment)) {
+            return RiderEligibilityDecision.denied(RiderDenialReason.ORDER_NOT_AVAILABLE)
+        }
         val now = nowText()
         val updated = o.copy(
             status = OrderStatus.ACCEPTED,
@@ -463,8 +495,8 @@ class MandadosController(context: Context) {
                 OrderEvent(OrderEventType.ACCEPTED, now, OrderStatus.ACCEPTED, riderId, "Pedido aceptado por el Repartidor", riderId)
             )
         )
-        updateOrder(updated)
-        ensurePaymentRecord(updated)
+        val payment = paymentRecordSynchronizedToOrder(updated, existingPayment, now)
+        persistOrderAndPayment(updated, payment)
         return RiderEligibilityDecision.ALLOWED
     }
 
@@ -511,7 +543,7 @@ class MandadosController(context: Context) {
         if (reason.trim().isBlank()) return false
 
         val p = pricing(edited)
-        val updated = o.copy(
+        val candidate = o.copy(
             serviceType = edited.serviceType,
             category = edited.category,
             detail = buildDetail(edited, p),
@@ -543,24 +575,52 @@ class MandadosController(context: Context) {
             prePickupZoneId = edited.prePickupZoneId,
             sameDeliveryAsPrePickup = edited.sameDeliveryAsPrePickup,
             deliveryPayment = edited.deliveryPayment,
-            notes = edited.notes,
+            notes = edited.notes
+        )
+        val paymentMatches = payments.filter { it.orderId == orderId }
+        if (paymentMatches.size > 1) return false
+        val existingPayment = paymentMatches.singleOrNull()
+        val mutation = evaluateOrderPaymentMutation(o, candidate, existingPayment)
+        if (mutation == OrderPaymentMutationAction.DENY) return false
+
+        val now = nowText()
+        val updated = candidate.copy(
             events = o.events + OrderEvent(
                 type = OrderEventType.ORDER_EDITED,
-                at = nowText(),
+                at = now,
                 status = o.status,
                 riderId = o.assignedRiderId,
                 note = reason.trim(),
                 actor = "ADMIN"
             )
         )
-        updateOrder(updated)
-        ensurePaymentRecord(updated)
+        when (mutation) {
+            OrderPaymentMutationAction.DENY -> return false
+            OrderPaymentMutationAction.ORDER_ONLY -> updateOrder(updated)
+            OrderPaymentMutationAction.ORDER_AND_PAYMENT -> {
+                val payment = paymentRecordSynchronizedToOrder(updated, existingPayment, now)
+                persistOrderAndPayment(updated, payment)
+            }
+        }
         return true
     }
 
     private fun updateOrder(updated: LocalOrder) {
         orders = orders.map { if (it.id == updated.id) updated else it }
         store.saveOrders(orders)
+    }
+
+    private fun persistOrderAndPayment(updatedOrder: LocalOrder, updatedPayment: PaymentRecord) {
+        val nextOrders = orders.map { if (it.id == updatedOrder.id) updatedOrder else it }
+        val hasExisting = payments.any { it.orderId == updatedOrder.id }
+        val nextPayments = if (hasExisting) {
+            payments.map { if (it.orderId == updatedOrder.id) updatedPayment else it }
+        } else {
+            payments + updatedPayment
+        }
+        store.saveOrdersAndPayments(nextOrders, nextPayments)
+        orders = nextOrders
+        payments = nextPayments
     }
 
     fun saveRider(
@@ -991,37 +1051,6 @@ class MandadosController(context: Context) {
         return payment.takeIf { riderOwnsTransfer(ownOrder, it, riderId) }
     }
 
-    private fun ensurePaymentRecord(order: LocalOrder) {
-        val channel = when (order.deliveryPayment) {
-            DeliveryPaymentMethod.CASH -> PaymentChannel.CASH
-            DeliveryPaymentMethod.TRANSFER -> PaymentChannel.RIDER_TRANSFER
-            DeliveryPaymentMethod.QR -> PaymentChannel.QR_INTEROPERABLE
-            DeliveryPaymentMethod.ONLINE -> PaymentChannel.ONLINE_CHECKOUT
-        }
-        val existing = paymentForOrder(order.id)
-        val now = nowText()
-        val record = if (existing == null) {
-            PaymentRecord(
-                id = "PAY-${order.id}",
-                orderId = order.id,
-                riderId = order.assignedRiderId,
-                channel = channel,
-                expectedAmount = order.totalAmount ?: 0,
-                createdAt = now,
-                updatedAt = now
-            )
-        } else {
-            existing.copy(
-                riderId = order.assignedRiderId,
-                channel = channel,
-                expectedAmount = order.totalAmount ?: existing.expectedAmount,
-                updatedAt = now
-            )
-        }
-        payments = if (existing == null) payments + record else payments.map { if (it.id == record.id) record else it }
-        store.savePayments(payments)
-    }
-
     private fun transfersForRider(riderId: String, statuses: Set<PaymentStatus>): List<PaymentRecord> {
         if (!hasAuthenticatedRiderSession(riderId)) return emptyList()
         return payments.filter { payment ->
@@ -1062,77 +1091,91 @@ class MandadosController(context: Context) {
 
     fun declarePayment(orderId: String): Boolean {
         val currentCustomer = customer ?: return false
-        if (customerOrder(orderId) == null) return false
-        val payment = paymentForOrder(orderId) ?: return false
+        val ownOrder = customerOrder(orderId) ?: return false
+        val matches = payments.filter { it.orderId == orderId }
+        if (matches.size != 1) return false
+        val payment = matches.single()
         if (!canCustomerDeclareTransfer(payment)) return false
-        val updated = payment.copy(status = PaymentStatus.DECLARED, updatedAt = nowText())
-        payments = payments.map { if (it.id == updated.id) updated else it }
-        store.savePayments(payments)
-        appendPaymentEvent(
-            orderId,
+        val now = nowText()
+        val updatedPayment = payment.copy(status = PaymentStatus.DECLARED, updatedAt = now)
+        val updatedOrder = ownOrder.copy(events = ownOrder.events + OrderEvent(
             OrderEventType.PAYMENT_DECLARED,
+            now,
+            ownOrder.status,
+            ownOrder.assignedRiderId,
             "Cliente informó que realizó la transferencia",
             currentCustomer.id
-        )
+        ))
+        persistOrderAndPayment(updatedOrder, updatedPayment)
         return true
     }
 
     fun attachTransferProof(orderId: String, uri: String): Boolean {
         val currentCustomer = customer ?: return false
-        if (customerOrder(orderId) == null || uri.isBlank()) return false
-        val payment = paymentForOrder(orderId) ?: return false
+        val ownOrder = customerOrder(orderId) ?: return false
+        if (uri.isBlank()) return false
+        val matches = payments.filter { it.orderId == orderId }
+        if (matches.size != 1) return false
+        val payment = matches.single()
         if (!canCustomerAttachTransferProof(payment)) return false
-        val updated = payment.copy(
+        val now = nowText()
+        val updatedPayment = payment.copy(
             proofUri = uri,
             status = PaymentStatus.PROOF_UPLOADED,
-            updatedAt = nowText()
+            updatedAt = now
         )
-        payments = payments.map { if (it.id == updated.id) updated else it }
-        store.savePayments(payments)
-        appendPaymentEvent(
-            orderId,
+        val updatedOrder = ownOrder.copy(events = ownOrder.events + OrderEvent(
             OrderEventType.PAYMENT_PROOF_ATTACHED,
+            now,
+            ownOrder.status,
+            ownOrder.assignedRiderId,
             "Comprobante de transferencia adjunto",
             currentCustomer.id
-        )
+        ))
+        persistOrderAndPayment(updatedOrder, updatedPayment)
         return true
     }
 
     fun confirmPaymentByRider(orderId: String, riderId: String): Boolean {
         if (!riderCanConfirmTransfer(orderId, riderId)) return false
-        val payment = paymentForOrder(orderId) ?: return false
-        val updated = payment.copy(status = PaymentStatus.CONFIRMED, updatedAt = nowText())
-        payments = payments.map { if (it.id == updated.id) updated else it }
-        store.savePayments(payments)
-        appendPaymentEvent(
-            orderId,
+        val ownOrder = order(orderId) ?: return false
+        val matches = payments.filter { it.orderId == orderId }
+        if (matches.size != 1) return false
+        val payment = matches.single()
+        if (!canRiderConfirmTransfer(ownOrder, payment, riderId, config.paymentConfig.transferProofRequired)) return false
+        val now = nowText()
+        val updatedPayment = payment.copy(status = PaymentStatus.CONFIRMED, updatedAt = now)
+        val updatedOrder = ownOrder.copy(events = ownOrder.events + OrderEvent(
             OrderEventType.PAYMENT_CONFIRMED,
+            now,
+            ownOrder.status,
+            ownOrder.assignedRiderId,
             "Acreditación confirmada por el Repartidor",
             riderId
-        )
+        ))
+        persistOrderAndPayment(updatedOrder, updatedPayment)
         return true
     }
 
     fun reportPaymentProblem(orderId: String, riderId: String): Boolean {
         if (!riderCanReportTransfer(orderId, riderId)) return false
-        val payment = paymentForOrder(orderId) ?: return false
-        val updated = payment.copy(status = PaymentStatus.IN_REVIEW, updatedAt = nowText())
-        payments = payments.map { if (it.id == updated.id) updated else it }
-        store.savePayments(payments)
-        appendPaymentEvent(
-            orderId,
+        val ownOrder = order(orderId) ?: return false
+        val matches = payments.filter { it.orderId == orderId }
+        if (matches.size != 1) return false
+        val payment = matches.single()
+        if (!canRiderReportTransfer(ownOrder, payment, riderId)) return false
+        val now = nowText()
+        val updatedPayment = payment.copy(status = PaymentStatus.IN_REVIEW, updatedAt = now)
+        val updatedOrder = ownOrder.copy(events = ownOrder.events + OrderEvent(
             OrderEventType.PAYMENT_REVIEW_REQUESTED,
+            now,
+            ownOrder.status,
+            ownOrder.assignedRiderId,
             "El Repartidor informó que no ve acreditado el pago",
             riderId
-        )
+        ))
+        persistOrderAndPayment(updatedOrder, updatedPayment)
         return true
-    }
-
-    private fun appendPaymentEvent(orderId: String, type: OrderEventType, note: String, actor: String) {
-        val o = order(orderId) ?: return
-        updateOrder(o.copy(events = o.events + OrderEvent(
-            type, nowText(), o.status, o.assignedRiderId, note, actor
-        )))
     }
 
     fun saveLegalDocument(document: LegalDocument) {
