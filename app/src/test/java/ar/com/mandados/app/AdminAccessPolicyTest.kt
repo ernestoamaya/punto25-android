@@ -161,7 +161,11 @@ class AdminAccessPolicyTest {
         assertTrue(gate.contains("tokenProvider = { AdminGoogleAuthIntegration.currentIdToken(context) }"))
         val tokenProviderLines = gate.lineSequence().map { it.trim() }
             .filter { it.startsWith("tokenProvider =") }.toList()
-        assertEquals(listOf("tokenProvider = { AdminGoogleAuthIntegration.currentIdToken(context) }"), tokenProviderLines)
+        assertEquals(1, tokenProviderLines.size)
+        assertEquals(
+            "tokenProvider = { AdminGoogleAuthIntegration.currentIdToken(context) }",
+            tokenProviderLines.single().removeSuffix(",")
+        )
         assertTrue(gate.contains("/v1/admin/access"))
     }
 
