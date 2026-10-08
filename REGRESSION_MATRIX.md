@@ -181,5 +181,12 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-SUPPORT-CUSTOMER-001 | Cliente obtiene exactamente sus cinco categorías y no recibe categorías exclusivas del Rider. | `SupportRolePolicyTest.REG-SUPPORT-CUSTOMER-001…` |
 | REG-SUPPORT-RIDER-001 | Rider obtiene exactamente sus seis categorías de soporte en orden determinista. | `SupportRolePolicyTest.REG-SUPPORT-RIDER-001…` |
 | REG-SUPPORT-WIRING-001 | Los entry points reales cablean Rider → RIDER y Cliente → CUSTOMER; `SupportScreen` delega en la política pura. | `SupportRolePolicyTest.REG-SUPPORT-WIRING-001…` |
+| REG-PAY-MUTATION-LOCK-001 | Todo pago financieramente comprometido bloquea cambios de importe/canal; también un `PENDING` con comprobante o `providerPaymentId`. | `OrderPaymentMutationIntegrityTest.REG-PAY-MUTATION-LOCK-001…` |
+| REG-PAY-RIDER-LOCK-001 | Una transferencia comprometida bloquea Rider A→B y Rider A→null sin alterar pedido, pago ni eventos. | `OrderPaymentMutationIntegrityTest.REG-PAY-RIDER-LOCK-001…` |
+| REG-PAY-MUTATION-PENDING-001 | Un pago `PENDING` limpio admite una mutación económica válida y sincroniza exactamente total, canal, importe esperado y Rider al tomar. | `OrderPaymentMutationIntegrityTest.REG-PAY-MUTATION-PENDING-001…` |
+| REG-PAY-NONFINANCIAL-EDIT-001 | Un pago comprometido coherente permite edición no financiera cuando el snapshot económico final es idéntico y el pago permanece byte-lógicamente intacto. | `OrderPaymentMutationIntegrityTest.REG-PAY-NONFINANCIAL-EDIT-001…` |
+| REG-PAY-QUOTE-CONSISTENCY-001 | `AWAITING_QUOTE` sin tarifa usa importe esperado 0; un pedido activo ya tarifado no puede degradarse a tarifa desconocida. | `OrderPaymentMutationIntegrityTest.REG-PAY-QUOTE-CONSISTENCY-001…` |
+| REG-PAY-ORDER-SYNC-001 | Tras una mutación permitida y recreación del controlador, pedido tarifado y pago conservan exactamente el mismo importe/canal. | `OrderPaymentMutationIntegrityTest.REG-PAY-ORDER-SYNC-001…` |
+| REG-PAY-MUTATION-NO-PARTIAL-001 | Una mutación bloqueada conserva exactamente pedido, pago, evidencia/proveedor, eventos, memoria y persistencia tras recreación. | `OrderPaymentMutationIntegrityTest.REG-PAY-MUTATION-NO-PARTIAL-001…` |
 
 Los nuevos bugs de Clase A deben incorporar, cuando sea técnicamente razonable, un `REG-*` y un test permanente antes de cerrar la tanda que los corrige.
