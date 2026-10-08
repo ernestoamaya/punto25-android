@@ -281,8 +281,8 @@ internal fun evaluateOrderZoneOverride(
     if (point !in applicableOrderZonePoints(currentOrder)) {
         return denied("Ese punto no aplica a este pedido.")
     }
-    if (paymentMatches.size > 1) {
-        return denied("El pedido tiene más de un registro de pago y requiere revisión manual.")
+    if (paymentMatches.size != 1) {
+        return denied("El pedido debe tener exactamente un registro de pago existente para corregir su zona.")
     }
 
     val overrideResult = resolveOrderZoneOverrideSelection(selection, config)
@@ -292,8 +292,8 @@ internal fun evaluateOrderZoneOverride(
     }.toMap()
     if (nextOverrides == currentOrder.zoneOverrides) return denied("No hay cambios para aplicar.")
 
-    val existingPayment = paymentMatches.singleOrNull()
-    if (existingPayment != null && isPaymentFinanciallyCommitted(existingPayment)) {
+    val existingPayment = paymentMatches.single()
+    if (isPaymentFinanciallyCommitted(existingPayment)) {
         return denied("La corrección no puede aplicarse porque el pago ya está financieramente comprometido.")
     }
 
