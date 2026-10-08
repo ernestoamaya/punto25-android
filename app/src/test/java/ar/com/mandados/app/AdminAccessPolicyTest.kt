@@ -159,7 +159,7 @@ class AdminAccessPolicyTest {
         val auth = projectFile("app/src/main/java/ar/com/mandados/app/AuthIntegration.kt")
         val gate = auth.substringAfter("internal object AdminAccessApi {").substringBefore("internal object WhatsAppVerificationApi")
         assertTrue(gate.contains("tokenProvider = { AdminGoogleAuthIntegration.currentIdToken(context) }"))
-        assertFalse(gate.contains("GoogleAuthIntegration.currentIdToken(context)"))
+        val tokenProviderLines = gate.lineSequence().map { it.trim() }\n            .filter { it.startsWith("tokenProvider =") }.toList()\n        assertEquals(listOf("tokenProvider = { AdminGoogleAuthIntegration.currentIdToken(context) }"), tokenProviderLines)
         assertTrue(gate.contains("/v1/admin/access"))
     }
 
