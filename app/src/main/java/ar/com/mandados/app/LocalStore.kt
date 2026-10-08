@@ -255,6 +255,10 @@ class LocalStore(context: Context) {
     }
 
     fun saveOrders(orders: List<LocalOrder>) {
+        prefs.edit().putString("orders", ordersJson(orders).toString()).apply()
+    }
+
+    private fun ordersJson(orders: List<LocalOrder>): JSONArray {
         val arr = JSONArray()
         orders.forEach { o ->
             arr.put(JSONObject().apply {
@@ -313,7 +317,7 @@ class LocalStore(context: Context) {
                 })
             })
         }
-        prefs.edit().putString("orders", arr.toString()).apply()
+        return arr
     }
 
     fun loadRiders(): List<RiderProfile> {
@@ -570,13 +574,28 @@ class LocalStore(context: Context) {
         )
     }
 
-    fun savePayments(items: List<PaymentRecord>) = saveArray("payments", items) { p ->
-        JSONObject().apply {
-            put("id", p.id); put("orderId", p.orderId); put("riderId", p.riderId ?: JSONObject.NULL)
-            put("channel", p.channel.name); put("expectedAmount", p.expectedAmount); put("status", p.status.name)
-            put("proofUri", p.proofUri ?: JSONObject.NULL); put("provider", p.provider ?: JSONObject.NULL)
-            put("providerPaymentId", p.providerPaymentId ?: JSONObject.NULL); put("createdAt", p.createdAt); put("updatedAt", p.updatedAt)
+    fun savePayments(items: List<PaymentRecord>) {
+        prefs.edit().putString("payments", paymentsJson(items).toString()).apply()
+    }
+
+    fun saveOrdersAndPayments(orders: List<LocalOrder>, payments: List<PaymentRecord>) {
+        prefs.edit()
+            .putString("orders", ordersJson(orders).toString())
+            .putString("payments", paymentsJson(payments).toString())
+            .apply()
+    }
+
+    private fun paymentsJson(items: List<PaymentRecord>): JSONArray {
+        val arr = JSONArray()
+        items.forEach { p ->
+            arr.put(JSONObject().apply {
+                put("id", p.id); put("orderId", p.orderId); put("riderId", p.riderId ?: JSONObject.NULL)
+                put("channel", p.channel.name); put("expectedAmount", p.expectedAmount); put("status", p.status.name)
+                put("proofUri", p.proofUri ?: JSONObject.NULL); put("provider", p.provider ?: JSONObject.NULL)
+                put("providerPaymentId", p.providerPaymentId ?: JSONObject.NULL); put("createdAt", p.createdAt); put("updatedAt", p.updatedAt)
+            })
         }
+        return arr
     }
 
     fun loadRatings(): List<OrderRating> = readArray("ratings") { o ->
