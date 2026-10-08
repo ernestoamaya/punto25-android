@@ -1326,12 +1326,11 @@ private fun ReviewScreen(c: MandadosController, onBack: () -> Unit, onSubmit: ()
 
 private fun MandadosController.pricingTextForUi(): String = buildString {
     val d = draft
-    fun pointLabel(point: GeoPoint?): String =
-        point?.let { " · pin ${"%.5f".format(it.latitude)}, ${"%.5f".format(it.longitude)}" } ?: ""
+    fun locationLabel(point: GeoPoint?): String = if (point != null) " · ubicación marcada" else ""
 
     if (d.serviceType == ServiceType.DELIVERY) {
-        appendLine("Retiro: ${d.originAddress.ifBlank { "Ubicación indicada en mapa" }}${pointLabel(d.originLocation)}")
-        appendLine("Entrega: ${d.destinationAddress.ifBlank { "Ubicación indicada en mapa" }}${pointLabel(d.destinationLocation)}")
+        appendLine("Retiro: ${d.originAddress.ifBlank { "Ubicación indicada en mapa" }}${locationLabel(d.originLocation)}")
+        appendLine("Entrega: ${d.destinationAddress.ifBlank { "Ubicación indicada en mapa" }}${locationLabel(d.destinationLocation)}")
         if (d.carriedItem.isNotBlank()) appendLine("Contenido: ${d.carriedItem}")
     } else {
         appendLine("Pedido: ${instructionText(d.instructionType)}")
@@ -1343,11 +1342,11 @@ private fun MandadosController.pricingTextForUi(): String = buildString {
                 purpose.isNotBlank() -> "Retiro previo — $purpose"
                 else -> "Retiro previo"
             }
-            appendLine("$label: ${d.prePickupAddress.ifBlank { "Ubicación indicada en mapa" }}${pointLabel(d.prePickupLocation)}")
+            appendLine("$label: ${d.prePickupAddress.ifBlank { "Ubicación indicada en mapa" }}${locationLabel(d.prePickupLocation)}")
         }
         val store = listOf(d.storeName, d.storeAddress).filter { it.isNotBlank() }.joinToString(" · ")
-        appendLine("Comercio de retiro: ${store.ifBlank { "No especificado" }}${pointLabel(d.storeLocation)}")
-        appendLine("Entrega: ${d.destinationAddress.ifBlank { "Ubicación indicada en mapa" }}${pointLabel(d.destinationLocation)}")
+        appendLine("Comercio de retiro: ${store.ifBlank { "No especificado" }}${locationLabel(d.storeLocation)}")
+        appendLine("Entrega: ${d.destinationAddress.ifBlank { "Ubicación indicada en mapa" }}${locationLabel(d.destinationLocation)}")
         appendLine("Pago compra: ${purchasePaymentText(d.purchasePayment)}")
     }
     appendLine("Pago delivery: ${deliveryPaymentText(d.deliveryPayment)}")
@@ -1385,10 +1384,9 @@ private fun SubmittedScreen(c: MandadosController, id: String?, onHome: () -> Un
 @Composable
 private fun HistoryScreen(c: MandadosController, onBack: () -> Unit, onOrder: (String) -> Unit) {
     val context = LocalContext.current
-    val customerId = c.customer?.id
     var fromDate by rememberSaveable { mutableStateOf(defaultReportFrom()) }
     var toDate by rememberSaveable { mutableStateOf(defaultReportTo()) }
-    val all = c.orders.filter { customerId == null || it.customerId == customerId }
+    val all = c.customerOrders()
     val items = filterOrdersForPeriod(all, fromDate, toDate)
         .sortedByDescending { c.parseTimestamp(it.createdAt) ?: java.time.LocalDateTime.MIN }
 
@@ -1440,9 +1438,11 @@ private fun HistoryScreen(c: MandadosController, onBack: () -> Unit, onOrder: (S
 
 @Composable
 private fun OrderDetailScreen(c: MandadosController, id: String?, onBack: () -> Unit, onWhatsApp: (LocalOrder) -> Unit) {
-    val o = c.order(id)
+    val o = c.customerOrder(id)
     val context = LocalContext.current
     var confirmCancel by rememberSaveable { mutableStateOf(false) }
+    var showLocations by rememberSaveable(id) { mutableStateOf(false) }
+    val locations = o?.let(::orderLocationPoints).orEmpty()
 
     val proofPicker = rememberLauncherForActivityResult(PickVisualMedia()) { uri ->
         if (uri != null && o != null) {
@@ -1468,7 +1468,16 @@ private fun OrderDetailScreen(c: MandadosController, id: String?, onBack: () -> 
                 c.deliveryDurationSeconds(o)?.let { Text("Tiempo de entrega: " + formatDurationUi(it), fontWeight = FontWeight.Bold) }
             }
             Spacer(Modifier.height(12.dp))
-            Text(o.detail)
+            StructuredOrderPresentation(c, o)
+
+            if (locations.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Text("UBICACIONES", fontWeight = FontWeight.Bold)
+                OutlinedButton(
+                    onClick = { showLocations = true },
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                ) { Text("VER UBICACIONES") }
+            }
 
             Spacer(Modifier.height(12.dp))
             val payment = if (o.operationMode == OperationMode.MULTI_RIDER) c.paymentForOrder(o.id) else null
@@ -1498,10 +1507,10 @@ private fun OrderDetailScreen(c: MandadosController, id: String?, onBack: () -> 
                         ) { Text(if (payment.proofUri.isNullOrBlank()) if (c.config.paymentConfig.transferProofRequired) "ADJUNTAR COMPROBANTE" else "ADJUNTAR COMPROBANTE (OPCIONAL)" else "REEMPLAZAR COMPROBANTE") }
                     }
                     if (payment.status == PaymentStatus.DECLARED) AssistBox("Transferencia informada · pendiente de confirmación del Repartidor.")
-    if (payment.status == PaymentStatus.PROOF_UPLOADED) AssistBox("Comprobante adjunto · pendiente de confirmación del Repartidor.")
-    if (payment.status == PaymentStatus.IN_REVIEW) AssistBox("Transferencia en revisión · el Repartidor todavía no visualiza la acreditación.")
-    if (!payment.proofUri.isNullOrBlank()) Text("Comprobante adjunto a este pedido.")
-    if (payment.status == PaymentStatus.CONFIRMED) AssistBox("Pago confirmado por el Repartidor.")
+                    if (payment.status == PaymentStatus.PROOF_UPLOADED) AssistBox("Comprobante adjunto · pendiente de confirmación del Repartidor.")
+                    if (payment.status == PaymentStatus.IN_REVIEW) AssistBox("Transferencia en revisión · el Repartidor todavía no visualiza la acreditación.")
+                    if (!payment.proofUri.isNullOrBlank()) Text("Comprobante adjunto a este pedido.")
+                    if (payment.status == PaymentStatus.CONFIRMED) AssistBox("Pago confirmado por el Repartidor.")
                 }
             }
 
@@ -1550,6 +1559,10 @@ private fun OrderDetailScreen(c: MandadosController, id: String?, onBack: () -> 
         }
     }
 
+    if (showLocations && locations.isNotEmpty()) {
+        OrderLocationsMapDialog(locations) { showLocations = false }
+    }
+
     if (confirmCancel && o != null) {
         Punto25AlertDialog(
             onDismissRequest = { confirmCancel = false },
@@ -1577,8 +1590,6 @@ private fun AdminLoginScreen(onBack: () -> Unit, onSuccess: () -> Unit) {
     var result by remember { mutableStateOf<AdminAccessResult?>(null) }
     var selectionError by remember { mutableStateOf(false) }
 
-    // No automatic check on entry: even a persisted secondary Firebase user cannot
-    // authorize navigation without an explicit Google selection and backend gate.
     fun selectAccount() {
         if (busy) return
         busy = true
@@ -1878,7 +1889,6 @@ private fun ZoneAdminDialog(
     }
 }
 
-
 @Composable
 private fun LocationField(
     label: String,
@@ -1891,12 +1901,12 @@ private fun LocationField(
         Column(Modifier.padding(10.dp)) {
             Text(label, fontWeight = FontWeight.SemiBold)
             Text(
-                point?.let { "Pin: ${"%.5f".format(it.latitude)}, ${"%.5f".format(it.longitude)}" } ?: "Sin pin confirmado",
+                if (point != null) "Ubicación marcada" else "Sin ubicación confirmada",
                 style = MaterialTheme.typography.bodySmall
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onOpen, enabled = enabled) {
-                    Text(if (point == null) "MARCAR EN MAPA" else "EDITAR PIN")
+                    Text(if (point == null) "MARCAR EN MAPA" else "EDITAR UBICACIÓN")
                 }
                 if (point != null && enabled) {
                     TextButton(onClick = onClear) { Text("QUITAR") }
@@ -2046,7 +2056,6 @@ private fun openWhatsApp(context: Context, receiver: String, message: String) {
         context.startActivity(Intent.createChooser(share, "Compartir solicitud"))
     }
 }
-
 
 private fun formatDurationUi(seconds: Long): String {
     val s = seconds.coerceAtLeast(0)
