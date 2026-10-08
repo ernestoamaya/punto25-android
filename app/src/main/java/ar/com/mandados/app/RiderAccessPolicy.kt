@@ -92,13 +92,30 @@ fun authenticatedRiderActiveOrders(controller: MandadosController, riderId: Stri
     }
 }
 
+internal fun authenticatedAssignedRiderOrder(
+    controller: MandadosController,
+    riderId: String,
+    orderId: String
+): LocalOrder? {
+    if (!controller.hasAuthenticatedRiderSession(riderId)) return null
+    val order = controller.order(orderId) ?: return null
+    return order.takeIf { it.assignedRiderId == riderId }
+}
+
 internal fun authenticatedRiderNavigationDestinations(
     controller: MandadosController,
     riderId: String,
     orderId: String
-): List<RiderOrderNavigationDestination> {
-    if (!controller.hasAuthenticatedRiderSession(riderId)) return emptyList()
-    val order = controller.order(orderId) ?: return emptyList()
-    if (order.assignedRiderId != riderId) return emptyList()
-    return riderOrderNavigationDestinations(order)
-}
+): List<RiderOrderNavigationDestination> =
+    authenticatedAssignedRiderOrder(controller, riderId, orderId)
+        ?.let(::riderOrderNavigationDestinations)
+        .orEmpty()
+
+internal fun authenticatedRiderOrderLocations(
+    controller: MandadosController,
+    riderId: String,
+    orderId: String
+): List<OrderLocationPoint> =
+    authenticatedAssignedRiderOrder(controller, riderId, orderId)
+        ?.let(::orderLocationPoints)
+        .orEmpty()
