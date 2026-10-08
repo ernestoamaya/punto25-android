@@ -148,6 +148,7 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-ORDER-LOCATION-PRESENTATION-001 | Cliente no muestra Pin/URLs legacy; usa presentación estructurada. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-PRESENTATION-001…` |
 | REG-ORDER-LOCATION-PRESENTATION-002 | Rider no muestra Pin/URLs legacy; usa presentación estructurada. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-PRESENTATION-002…` |
 | REG-ORDER-LOCATION-PRESENTATION-003 | Admin no muestra Pin/URLs/coordenadas técnicas; usa presentación estructurada. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-PRESENTATION-003…` |
+| REG-ORDER-LOCATION-PRESENTATION-004 | Rider restringido no muestra `order.detail` legacy; reutiliza presentación estructurada y conserva sesión/asignación fail-closed. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-PRESENTATION-004…` |
 | REG-ORDER-LOCATION-STRUCTURED-001 | Visor usa sólo GeoPoint estructurados según tipo de servicio; nunca detail/URL/texto/dirección. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-STRUCTURED-001…` |
 | REG-ORDER-LOCATION-READONLY-001 | Visor interno no pide ubicación/permisos ni muta pedido/draft/zona/estado. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-READONLY-001…` |
 | REG-ORDER-LOCATION-POINTS-001 | DELIVERY muestra sólo GeoPoints existentes de retiro/entrega. | `OrderLocationPresentationTest.REG-ORDER-LOCATION-POINTS-001…` |
