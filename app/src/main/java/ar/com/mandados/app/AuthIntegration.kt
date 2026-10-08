@@ -103,9 +103,74 @@ internal object GoogleAuthIntegration {
     }
 }
 
+
+/**
+ * Admin Firebase Auth is intentionally separate from the customer DEFAULT app.
+ * No operation in this object signs out or mutates the customer FirebaseAuth.
+ */
+internal object AdminGoogleAuthIntegration {
+    internal const val APP_NAME = "punto25-admin-auth"
+
+    private fun ensureAdminApp(context: Context): FirebaseApp {
+        check(APP_NAME != FirebaseApp.DEFAULT_APP_NAME)
+        check(GoogleAuthIntegration.isConfigured()) { "Firebase/Google no está configurado." }
+        FirebaseApp.getApps(context).firstOrNull { it.name == APP_NAME }?.let { return it }
+        val options = FirebaseOptions.Builder()
+            .setApiKey(BuildConfig.FIREBASE_API_KEY)
+            .setApplicationId(BuildConfig.FIREBASE_APP_ID)
+            .setProjectId(BuildConfig.FIREBASE_PROJECT_ID)
+            .build()
+        return FirebaseApp.initializeApp(context.applicationContext, options, APP_NAME)
+    }
+
+    suspend fun signIn(activity: Activity): Result<GoogleIdentity> = runCatching {
+        val auth = FirebaseAuth.getInstance(ensureAdminApp(activity))
+        // A previous Admin identity must never authorize or silently select an account.
+        auth.signOut()
+        val option = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false)
+            .setServerClientId(BuildConfig.GOOGLE_WEB_CLIENT_ID)
+            .setAutoSelectEnabled(false)
+            .build()
+        val response = CredentialManager.create(activity).getCredential(
+            context = activity,
+            request = GetCredentialRequest.Builder().addCredentialOption(option).build()
+        )
+        val credential = response.credential
+        check(credential is CustomCredential &&
+            credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
+            "Google no devolvió una credencial compatible."
+        }
+        val google = GoogleIdTokenCredential.createFrom(credential.data)
+        val signedIn = auth.signInWithCredential(
+            GoogleAuthProvider.getCredential(google.idToken, null)
+        ).await()
+        val user = signedIn.user ?: error("Firebase Admin no devolvió un usuario.")
+        GoogleIdentity(user.uid, user.email, user.displayName)
+    }
+
+    fun hasCurrentUser(context: Context): Boolean =
+        runCatching { FirebaseAuth.getInstance(ensureAdminApp(context)).currentUser != null }
+            .getOrDefault(false)
+
+    suspend fun currentIdToken(context: Context): String? {
+        if (!GoogleAuthIntegration.isConfigured()) return null
+        val auth = runCatching { FirebaseAuth.getInstance(ensureAdminApp(context)) }.getOrNull()
+            ?: return null
+        return auth.currentUser?.getIdToken(false)?.await()?.token
+    }
+
+    fun signOut(context: Context) {
+        // Do not initialize Firebase solely to sign out an Admin session.
+        FirebaseApp.getApps(context).firstOrNull { it.name == APP_NAME }?.let {
+            FirebaseAuth.getInstance(it).signOut()
+        }
+    }
+}
+
 internal object AdminAccessApi {
     suspend fun check(context: Context): AdminAccessResult = evaluateAdminAccess(
-        tokenProvider = { GoogleAuthIntegration.currentIdToken(context) },
+        tokenProvider = { AdminGoogleAuthIntegration.currentIdToken(context) },
         requester = { token -> request(token) }
     )
 

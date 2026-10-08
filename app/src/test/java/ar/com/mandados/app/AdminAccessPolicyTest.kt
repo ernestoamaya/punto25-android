@@ -13,9 +13,9 @@ class AdminAccessPolicyTest {
         val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
 
         assertTrue(app.contains("Text(\"ADMINISTRACIÓN\""))
-        assertTrue(app.contains("adminLoginReturnScreen = Screen.REGISTER\n                screen = Screen.ADMIN_LOGIN"))
-        assertTrue(app.contains("Screen.ADMIN_LOGIN -> adminLoginReturnScreen"))
-        assertTrue(app.contains("screen = adminLoginReturnScreen"))
+        assertTrue(app.contains("onAdmin = {\n                adminSession.clear()\n                screen = Screen.ADMIN_LOGIN"))
+        assertTrue(app.contains("Screen.ADMIN_LOGIN -> Screen.REGISTER"))
+        assertTrue(app.contains("screen = Screen.REGISTER"))
     }
 
     @Test
@@ -43,7 +43,7 @@ class AdminAccessPolicyTest {
         assertFalse(app.contains("BuildConfig.ALPHA_ADMIN_PIN"))
         assertTrue(app.contains("AdminAccessApi.check(context)"))
         assertTrue(auth.contains("/v1/admin/access"))
-        assertTrue(auth.contains("GoogleAuthIntegration.currentIdToken(context)"))
+        assertTrue(auth.contains("AdminGoogleAuthIntegration.currentIdToken(context)"))
     }
 
     @Test
@@ -123,9 +123,9 @@ class AdminAccessPolicyTest {
         assertFalse(session.authorized)
 
         val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
-        assertTrue(app.contains("onBack = {\n                adminSession.clear()\n                screen = adminLoginReturnScreen"))
-        assertTrue(app.contains("adminLoginReturnScreen = Screen.HOME"))
-        assertTrue(app.contains("adminLoginReturnScreen = Screen.REGISTER"))
+        assertTrue(app.contains("onBack = {\n                adminSession.clear()\n                AdminGoogleAuthIntegration.signOut(context)\n                screen = Screen.REGISTER"))
+        assertFalse(app.contains("adminLoginReturnScreen"))
+        assertTrue(app.contains("Screen.ADMIN_LOGIN -> Screen.REGISTER"))
         assertTrue(app.contains("onLogout = {\n                adminSession.clear()"))
     }
 
@@ -141,7 +141,109 @@ class AdminAccessPolicyTest {
         assertTrue(app.contains("val adminSession = remember { AdminAccessSession() }"))
         assertFalse(app.contains("rememberSaveable { AdminAccessSession()"))
         assertTrue(app.contains("requiresAdminReauthorization"))
-        assertTrue(app.contains("!GoogleAuthIntegration.hasCurrentUser(context)"))
+        assertTrue(app.contains("!AdminGoogleAuthIntegration.hasCurrentUser(context)"))
+    }
+
+
+    @Test
+    fun `REG-ADMIN-SESSION-ISOLATION-001 secondary Firebase app is distinct`() {
+        val auth = projectFile("app/src/main/java/ar/com/mandados/app/AuthIntegration.kt")
+        assertTrue(auth.contains("APP_NAME = \"punto25-admin-auth\""))
+        assertTrue(auth.contains("APP_NAME != FirebaseApp.DEFAULT_APP_NAME"))
+        assertTrue(auth.contains("FirebaseApp.initializeApp(context.applicationContext, options, APP_NAME)"))
+        assertTrue(auth.contains("FirebaseAuth.getInstance(ensureAdminApp(activity))"))
+    }
+
+    @Test
+    fun `REG-ADMIN-SESSION-ISOLATION-002 backend gate only uses Admin token`() {
+        val auth = projectFile("app/src/main/java/ar/com/mandados/app/AuthIntegration.kt")
+        val gate = auth.substringAfter("internal object AdminAccessApi {").substringBefore("internal object WhatsAppVerificationApi")
+        assertTrue(gate.contains("tokenProvider = { AdminGoogleAuthIntegration.currentIdToken(context) }"))
+        val tokenProviderLines = gate.lineSequence().map { it.trim() }
+            .filter { it.startsWith("tokenProvider =") }.toList()
+        assertEquals(1, tokenProviderLines.size)
+        assertEquals(
+            "tokenProvider = { AdminGoogleAuthIntegration.currentIdToken(context) }",
+            tokenProviderLines.single().removeSuffix(",")
+        )
+        assertTrue(gate.contains("/v1/admin/access"))
+    }
+
+    @Test
+    fun `REG-ADMIN-SESSION-ISOLATION-003 Admin never signs out customer`() {
+        val auth = projectFile("app/src/main/java/ar/com/mandados/app/AuthIntegration.kt")
+        val admin = auth.substringAfter("internal object AdminGoogleAuthIntegration {").substringBefore("internal object AdminAccessApi")
+        assertFalse(admin.contains("GoogleAuthIntegration.signOut"))
+        assertFalse(admin.contains("FirebaseAuth.getInstance(app).signOut"))
+        assertTrue(admin.contains("FirebaseAuth.getInstance(it).signOut()"))
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        assertFalse(app.contains("adminLoginReturnScreen"))
+    }
+
+    @Test
+    fun `REG-ADMIN-ACCOUNT-SWITCH-001 unauthorized offers explicit new selection`() {
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val auth = projectFile("app/src/main/java/ar/com/mandados/app/AuthIntegration.kt")
+        assertTrue(app.contains("Text(\"USAR OTRA CUENTA\")"))
+        assertFalse(app.contains("VOLVER A VERIFICAR"))
+        assertTrue(app.contains("AdminGoogleAuthIntegration.signOut(context)"))
+        assertTrue(auth.contains(".setAutoSelectEnabled(false)"))
+        assertTrue(app.contains("if (checked == AdminAccessResult.AUTHORIZED)"))
+    }
+
+    @Test
+    fun `REG-ADMIN-HOME-001 Home does not expose Admin`() {
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val home = app.substringAfter("private fun HomeScreen(").substringBefore("@Composable\nprivate fun ServiceCard")
+        assertFalse(home.contains("onAdmin"))
+        assertFalse(home.contains("ADMINISTRACIÓN"))
+        assertTrue(home.contains("Cambiar usuario"))
+    }
+
+    @Test
+    fun `REG-ADMIN-ENTRY-002 REGISTER routes through login only`() {
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val register = app.substringAfter("Screen.REGISTER -> RegisterScreen(").substringBefore("Screen.WHATSAPP_VERIFY")
+        assertTrue(register.contains("screen = Screen.ADMIN_LOGIN"))
+        assertFalse(register.contains("screen = Screen.ADMIN\n"))
+    }
+
+    @Test
+    fun `REG-ADMIN-FAILCLOSED-001 invalid and missing tokens cannot authorize`() = runBlocking {
+        for (token in listOf(null, "", " ")) {
+            var called = false
+            val result = evaluateAdminAccess(
+                tokenProvider = { token },
+                requester = { called = true; AdminAccessHttpResult(200, true) }
+            )
+            assertFalse(AdminAccessSession().also { it.apply(result) }.authorized)
+            assertFalse(called)
+        }
+        for (response in listOf(AdminAccessHttpResult(401, null), AdminAccessHttpResult(403, null),
+            AdminAccessHttpResult(200, null), AdminAccessHttpResult(200, false),
+            AdminAccessHttpResult(500, true))) {
+            val result = evaluateAdminAccess({ "token" }, { response })
+            assertFalse(AdminAccessSession().also { it.apply(result) }.authorized)
+        }
+    }
+
+    @Test
+    fun `REG-ADMIN-EXIT-001 exit clears secondary session only`() {
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        assertTrue(app.contains("adminSession.clear()\n                AdminGoogleAuthIntegration.signOut(context)\n                screen = Screen.REGISTER"))
+        assertFalse(app.contains("screen = Screen.HOME\n            },\n            onOrders"))
+    }
+
+    @Test
+    fun `REG-ADMIN-RECREATE-001 persisted auth does not silently grant Admin`() {
+        val app = projectFile("app/src/main/java/ar/com/mandados/app/MandadosApp.kt")
+        val login = app.substringAfter("private fun AdminLoginScreen(").substringBefore("private fun AdminScreen(")
+        assertFalse(login.contains("LaunchedEffect"))
+        assertTrue(login.contains("INGRESAR CON GOOGLE"))
+        assertTrue(app.contains("val adminSession = remember { AdminAccessSession() }"))
+        assertFalse(app.contains("rememberSaveable { AdminAccessSession()"))
+        val fresh = AdminAccessSession()
+        assertFalse(fresh.authorized)
     }
 
     private fun projectFile(repoRelativePath: String): String {

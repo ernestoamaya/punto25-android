@@ -124,7 +124,6 @@ private fun MandadosNavigation(controller: MandadosController) {
     var selectedRiderId by rememberSaveable { mutableStateOf<String?>(null) }
     var mapTarget by rememberSaveable { mutableStateOf<MapTarget?>(null) }
     var lastRootBackAt by rememberSaveable { mutableStateOf(0L) }
-    var adminLoginReturnScreen by rememberSaveable { mutableStateOf(Screen.HOME) }
     val adminSession = remember { AdminAccessSession() }
     val protectedAdminScreens = remember {
         setOf(
@@ -140,7 +139,7 @@ private fun MandadosNavigation(controller: MandadosController) {
         )
     }
     val requiresAdminReauthorization = screen in protectedAdminScreens &&
-        (!adminSession.authorized || !GoogleAuthIntegration.hasCurrentUser(context))
+        (!adminSession.authorized || !AdminGoogleAuthIntegration.hasCurrentUser(context))
 
     fun openMap(target: MapTarget) {
         mapTarget = target
@@ -154,15 +153,18 @@ private fun MandadosNavigation(controller: MandadosController) {
     }
 
     fun navigateBack() {
-        if (screen == Screen.ADMIN || screen == Screen.ADMIN_LOGIN) adminSession.clear()
+        if (screen == Screen.ADMIN || screen == Screen.ADMIN_LOGIN) {
+            adminSession.clear()
+            AdminGoogleAuthIntegration.signOut(context)
+        }
         screen = when (screen) {
             Screen.WHATSAPP_VERIFY, Screen.RIDER_ACCESS -> Screen.REGISTER
             Screen.DELIVERY, Screen.SHOPPING, Screen.HISTORY, Screen.CUSTOMER_PROFILE, Screen.CUSTOMER_SUPPORT -> Screen.HOME
-            Screen.ADMIN_LOGIN -> adminLoginReturnScreen
+            Screen.ADMIN_LOGIN -> Screen.REGISTER
             Screen.REVIEW -> if (controller.draft.serviceType == ServiceType.DELIVERY) Screen.DELIVERY else Screen.SHOPPING
             Screen.SUBMITTED -> Screen.HOME
             Screen.ORDER_DETAIL -> Screen.HISTORY
-            Screen.ADMIN -> Screen.HOME
+            Screen.ADMIN -> Screen.REGISTER
             Screen.ADMIN_ORDERS, Screen.ADMIN_REPORTS, Screen.ADMIN_SHIFTS, Screen.ADMIN_PAYMENTS, Screen.ADMIN_LEGAL, Screen.RIDERS -> Screen.ADMIN
             Screen.ADMIN_ORDER_DETAIL -> Screen.ADMIN_ORDERS
             Screen.RIDER_ADMIN_VIEW -> {
@@ -182,7 +184,8 @@ private fun MandadosNavigation(controller: MandadosController) {
     BackHandler(enabled = true) {
         if (requiresAdminReauthorization) {
             adminSession.clear()
-            screen = Screen.HOME
+            AdminGoogleAuthIntegration.signOut(context)
+            screen = Screen.REGISTER
         } else if (screen == Screen.HOME || screen == Screen.REGISTER) {
             val now = SystemClock.elapsedRealtime()
             if (now - lastRootBackAt <= 2_000L) {
@@ -204,7 +207,8 @@ private fun MandadosNavigation(controller: MandadosController) {
         AdminLoginScreen(
             onBack = {
                 adminSession.clear()
-                screen = Screen.HOME
+                AdminGoogleAuthIntegration.signOut(context)
+                screen = Screen.REGISTER
             },
             onSuccess = {
                 adminSession.apply(AdminAccessResult.AUTHORIZED)
@@ -221,7 +225,6 @@ private fun MandadosNavigation(controller: MandadosController) {
             onRider = { screen = Screen.RIDER_ACCESS },
             onAdmin = {
                 adminSession.clear()
-                adminLoginReturnScreen = Screen.REGISTER
                 screen = Screen.ADMIN_LOGIN
             }
         )
@@ -249,11 +252,6 @@ private fun MandadosNavigation(controller: MandadosController) {
             onHistory = { screen = Screen.HISTORY },
             onProfile = { screen = Screen.CUSTOMER_PROFILE },
             onSupport = { screen = Screen.CUSTOMER_SUPPORT },
-            onAdmin = {
-                adminSession.clear()
-                adminLoginReturnScreen = Screen.HOME
-                screen = Screen.ADMIN_LOGIN
-            },
             onLogout = {
                 adminSession.clear()
                 GoogleAuthIntegration.signOut(context)
@@ -299,7 +297,8 @@ private fun MandadosNavigation(controller: MandadosController) {
         Screen.ADMIN_LOGIN -> AdminLoginScreen(
             onBack = {
                 adminSession.clear()
-                screen = adminLoginReturnScreen
+                AdminGoogleAuthIntegration.signOut(context)
+                screen = Screen.REGISTER
             },
             onSuccess = {
                 adminSession.apply(AdminAccessResult.AUTHORIZED)
@@ -310,7 +309,8 @@ private fun MandadosNavigation(controller: MandadosController) {
             controller,
             onBack = {
                 adminSession.clear()
-                screen = Screen.HOME
+                AdminGoogleAuthIntegration.signOut(context)
+                screen = Screen.REGISTER
             },
             onOrders = { screen = Screen.ADMIN_ORDERS },
             onRiders = { screen = Screen.RIDERS },
@@ -845,7 +845,6 @@ private fun HomeScreen(
     onHistory: () -> Unit,
     onProfile: () -> Unit,
     onSupport: () -> Unit,
-    onAdmin: () -> Unit,
     onLogout: () -> Unit
 ) {
     Page("Punto25") {
@@ -953,7 +952,6 @@ private fun HomeScreen(
 
         Spacer(Modifier.height(12.dp))
         Text("Peso máximo: ${c.config.maxWeightKg} kg · Compras hasta ${money(c.config.maxPurchaseAmount)}", style = MaterialTheme.typography.bodySmall)
-        OutlinedButton(onClick = onAdmin, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) { Text("ADMINISTRACIÓN") }
         TextButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) { Text("Cambiar usuario") }
     }
 }
@@ -1573,36 +1571,65 @@ private fun OrderDetailScreen(c: MandadosController, id: String?, onBack: () -> 
 @Composable
 private fun AdminLoginScreen(onBack: () -> Unit, onSuccess: () -> Unit) {
     val context = LocalContext.current
-    var attempt by remember { mutableIntStateOf(0) }
+    val activity = context as? Activity
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<AdminAccessResult?>(null) }
+    var selectionError by remember { mutableStateOf(false) }
 
-    LaunchedEffect(attempt) {
+    // No automatic check on entry: even a persisted secondary Firebase user cannot
+    // authorize navigation without an explicit Google selection and backend gate.
+    fun selectAccount() {
+        if (busy) return
+        busy = true
         result = null
-        val checked = AdminAccessApi.check(context)
-        result = checked
-        if (checked == AdminAccessResult.AUTHORIZED) onSuccess()
+        selectionError = false
+        scope.launch {
+            try {
+                AdminGoogleAuthIntegration.signOut(context)
+                val signedIn = if (activity == null) null else AdminGoogleAuthIntegration.signIn(activity).getOrNull()
+                if (signedIn == null) {
+                    selectionError = true
+                } else {
+                    val checked = AdminAccessApi.check(context)
+                    result = checked
+                    if (checked == AdminAccessResult.AUTHORIZED) {
+                        onSuccess()
+                    } else if (checked == AdminAccessResult.UNAUTHORIZED) {
+                        AdminGoogleAuthIntegration.signOut(context)
+                    }
+                }
+            } catch (_: Exception) {
+                result = AdminAccessResult.UNAVAILABLE
+                AdminGoogleAuthIntegration.signOut(context)
+            } finally {
+                busy = false
+            }
+        }
     }
 
     Page("Administración", onBack) {
-        when (result) {
-            null -> {
-                CircularProgressIndicator()
-                Text("Verificando acceso…", modifier = Modifier.padding(top = 12.dp))
+        if (busy) {
+            CircularProgressIndicator()
+            Text("Verificando acceso…", modifier = Modifier.padding(top = 12.dp))
+        } else when {
+            result == AdminAccessResult.UNAUTHORIZED -> {
+                Text("Esta cuenta no tiene acceso de Administración.", color = MaterialTheme.colorScheme.error)
+                OutlinedButton(onClick = { selectAccount() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                    Text("USAR OTRA CUENTA")
+                }
             }
-            AdminAccessResult.AUTHORIZED -> Text("Acceso autorizado.")
-            AdminAccessResult.UNAUTHORIZED -> {
-                Text("Acceso no autorizado.", color = MaterialTheme.colorScheme.error)
-                OutlinedButton(
-                    onClick = { attempt += 1 },
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
-                ) { Text("VOLVER A VERIFICAR") }
-            }
-            AdminAccessResult.UNAVAILABLE -> {
+            result == AdminAccessResult.UNAVAILABLE -> {
                 Text("Servicio temporalmente no disponible.", color = MaterialTheme.colorScheme.error)
-                OutlinedButton(
-                    onClick = { attempt += 1 },
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
-                ) { Text("REINTENTAR") }
+                OutlinedButton(onClick = { selectAccount() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                    Text("REINTENTAR")
+                }
+            }
+            else -> {
+                if (selectionError) Text("No se pudo seleccionar una cuenta Google.", color = MaterialTheme.colorScheme.error)
+                Button(onClick = { selectAccount() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                    Text("INGRESAR CON GOOGLE")
+                }
             }
         }
     }
