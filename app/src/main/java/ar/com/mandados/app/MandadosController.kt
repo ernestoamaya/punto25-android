@@ -236,34 +236,10 @@ class MandadosController(context: Context) {
         if (changed) orders = reconciled
     }
 
-    fun pricing(d: OrderDraft = draft): PricingResult {
-        val ids = mutableListOf<String>()
-        if (d.serviceType == ServiceType.DELIVERY) {
-            ids += d.originZoneId
-            ids += d.destinationZoneId
-        } else {
-            if (d.storeZoneId.isNotBlank()) ids += d.storeZoneId
-            ids += d.destinationZoneId
-            if (d.requiresPrePickup()) ids += d.prePickupZoneId
-        }
-        if (ids.any { it.isBlank() || it == UNKNOWN_ZONE_ID }) {
-            return PricingResult(true, null, null, null, if (config.rainEnabled) config.rainAmount else 0, null, "Zona a confirmar")
-        }
-        val zones = ids.mapNotNull { zone(it) }
-        if (zones.size != ids.size) return PricingResult(true, null, null, null, null, null, "Zona inválida")
-        if (zones.any { !it.enabled }) return PricingResult(true, null, null, null, null, null, "Hay una zona deshabilitada")
-        if (zones.any { it.price <= 0 }) return PricingResult(true, null, null, null, null, null, "Falta configurar una tarifa")
-        val baseZone = zones.maxBy { it.price }
-        val pre = if (d.serviceType == ServiceType.SHOPPING && d.requiresPrePickup()) {
-            when (config.prePickupMode) {
-                PrePickupMode.OFF -> 0
-                PrePickupMode.FIXED -> config.prePickupValue
-                PrePickupMode.PERCENT_BASE -> percentOfBaseRoundedUpToHundred(baseZone.price, config.prePickupValue)
-            }
-        } else 0
-        val rain = if (config.rainEnabled) config.rainAmount else 0
-        return PricingResult(false, baseZone.price, baseZone.name, pre, rain, baseZone.price + pre + rain)
-    }
+    fun pricing(
+        d: OrderDraft = draft,
+        overrides: Map<OrderZonePoint, OrderZoneOverride> = emptyMap()
+    ): PricingResult = calculateOrderPricing(d, overrides, config)
 
     fun createOrder(): OrderCreationResult {
         if (!config.acceptingOrders) return OrderCreationResult.Blocked(config.closedMessage)
@@ -532,6 +508,68 @@ class MandadosController(context: Context) {
         notes = order.notes
     )
 
+    fun previewOrderZoneOverride(
+        orderId: String,
+        point: OrderZonePoint,
+        selection: OrderZoneOverrideSelection
+    ): OrderZoneOverrideEvaluation? {
+        val current = order(orderId) ?: return null
+        return evaluateOrderZoneOverride(
+            currentOrder = current,
+            point = point,
+            selection = selection,
+            config = config,
+            paymentMatches = payments.filter { it.orderId == orderId }
+        )
+    }
+
+    fun applyOrderZoneOverride(
+        orderId: String,
+        point: OrderZonePoint,
+        selection: OrderZoneOverrideSelection,
+        reason: String
+    ): Boolean {
+        if (reason.trim().isBlank()) return false
+        val current = order(orderId) ?: return false
+        val paymentMatches = payments.filter { it.orderId == orderId }
+        val evaluation = evaluateOrderZoneOverride(
+            currentOrder = current,
+            point = point,
+            selection = selection,
+            config = config,
+            paymentMatches = paymentMatches
+        )
+        if (!evaluation.allowed) return false
+        val candidate = evaluation.candidateOrder ?: return false
+        val now = nowText()
+        val updated = candidate.copy(
+            events = current.events + OrderEvent(
+                type = OrderEventType.ORDER_EDITED,
+                at = now,
+                status = candidate.status,
+                riderId = current.assignedRiderId,
+                note = zoneOverrideAuditNote(evaluation, reason),
+                actor = "ADMIN"
+            )
+        )
+        return when (evaluation.paymentMutation) {
+            OrderPaymentMutationAction.DENY -> false
+            OrderPaymentMutationAction.ORDER_ONLY -> {
+                updateOrder(updated)
+                true
+            }
+            OrderPaymentMutationAction.ORDER_AND_PAYMENT -> {
+                val payment = paymentRecordSynchronizedToOrder(
+                    order = updated,
+                    existing = paymentMatches.singleOrNull(),
+                    timestamp = now
+                )
+                persistOrderAndPayment(updated, payment)
+                true
+            }
+        }
+    }
+
     fun canEditOrder(order: LocalOrder): Boolean =
         order.operationMode == OperationMode.MULTI_RIDER &&
             order.status != OrderStatus.CANCELLED &&
@@ -542,7 +580,7 @@ class MandadosController(context: Context) {
         if (!canEditOrder(o)) return false
         if (reason.trim().isBlank()) return false
 
-        val p = pricing(edited)
+        val p = pricing(edited, o.zoneOverrides)
         val candidate = o.copy(
             serviceType = edited.serviceType,
             category = edited.category,
@@ -1414,7 +1452,6 @@ class MandadosController(context: Context) {
                     error = "El almacenamiento de Turnos no está disponible."
                 )
             }
-            // Rebuild from the current snapshot: preview state is never trusted for persistence.
             val current = ShiftSchedulePolicy.buildGenerationPreview(request, shiftRules, concreteShifts)
             if (!current.canConfirm || current.newShifts.isEmpty()) return@synchronized current
             val final = concreteShifts + current.newShifts
@@ -1705,7 +1742,6 @@ class MandadosController(context: Context) {
         return (15 - Duration.between(at, LocalDateTime.now()).toMinutes()).coerceAtLeast(0)
     }
 
-    // V1 Alpha APIs are kept only as inert compile-time compatibility. No operational flow reads legacy keys.
     @Deprecated("ShiftTemplate v1 is disabled by TODO-3A")
     fun saveShiftTemplate(shift: ShiftTemplate) = Unit
 
