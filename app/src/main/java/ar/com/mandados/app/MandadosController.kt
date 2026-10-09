@@ -203,9 +203,18 @@ class MandadosController(context: Context) {
     fun updateZone(id: String, name: String, description: String, category: String, price: Int, enabled: Boolean): Boolean {
         val clean = name.trim()
         if (clean.isBlank()) return false
-        if (config.zones.none { it.id == id }) return false
+        val current = config.zones.firstOrNull { it.id == id } ?: return false
+        val candidate = current.copy(
+            name = clean,
+            description = description.trim(),
+            category = category.trim().ifBlank { "OTRAS" },
+            price = price.coerceAtLeast(0),
+            enabled = enabled
+        )
+        if (!canApplyZoneMetadataUpdate(config, current, candidate)) return false
+        if (candidate == current) return true
         updateConfig(config.copy(zones = config.zones.map {
-            if (it.id == id) it.copy(name = clean, description = description.trim(), category = category.trim().ifBlank { "OTRAS" }, price = price.coerceAtLeast(0), enabled = enabled) else it
+            if (it.id == id) candidate else it
         }))
         return true
     }
