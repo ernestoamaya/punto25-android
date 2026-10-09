@@ -58,7 +58,8 @@ data class ZoneConfig(
     val description: String,
     val category: String,
     val price: Int = 0,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val polygons: List<List<GeoPoint>> = emptyList()
 )
 
 data class OrderZoneOverride(
