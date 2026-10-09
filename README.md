@@ -1,100 +1,92 @@
 # Punto25 Android
 
-Punto25 is an Android delivery/errand platform currently under active Alpha development.
+Punto25 is an Android delivery/errand platform under active Alpha development. This repository is currently public; the product is not yet a production release.
 
-Current validated Android baseline:
+## Current Android baseline
 
 - Version: `0.3-alpha3-dev3.9`
 - versionCode: `16`
-- Canonical source branch: `main`; the exact publication SHA must be re-verified immediately before any visibility change.
-- Android package/applicationId: `ar.com.mandados.app`
+- applicationId / namespace: `ar.com.mandados.app`
+- minSdk: `26`
+- targetSdk: `36`
+- compileSdk: `37`
+- Java: `17`
+- Android Gradle Plugin: `9.1.1`
+- Kotlin / Compose plugin: `2.4.20`
+- CI Gradle: `9.3.1`
+- Canonical branch: `main`
 
 ## Project status
 
-This is Alpha software. It is intended for controlled development and physical-device validation, not for production use.
+The current Alpha client includes Customer, Rider and Administration flows; orders and status history; Rider shifts/capacity; service pricing; payment/transfer flows; local Alpha persistence; structured order locations; and Admin order-zone overrides.
 
-The current client includes, among other flows:
+The current map stack is **MapLibre Compose + OpenFreeMap**. Google Maps Compose/SDK and `MAPS_API_KEY` are not part of the current application configuration. Google Play Services Location remains in use only for Android location access (for example, obtaining a recent device location); it is not the map renderer.
 
-- Customer registration and local identity flows;
-- orders/deliveries and status history;
-- Rider invitation/login flows;
-- Rider shifts and capacity management;
-- Admin tools used during Alpha;
-- service pricing and payment-method snapshots;
-- Rider transfer confirmation workflow;
-- local persistence used by the current Alpha;
-- Google Maps/location integrations;
-- Firebase/Google authentication integration scaffolding.
+Authentication uses Firebase Authentication and Google Identity. Customer authentication uses the default Firebase app. Administration uses a separate Firebase app/auth context and then calls the backend endpoint `/v1/admin/access`; only an `AUTHORIZED` result grants the transient Admin session. `UNAUTHORIZED`, missing credentials and unavailable/error states fail closed. There is no current local `ALPHA_ADMIN_PIN` authorization mechanism.
 
-Some production-grade architecture remains intentionally pending, including server authority for core data, multi-device synchronization, production RBAC, production-grade payment/financial controls, FCM, private remote document storage and other hardening work.
+Alpha data is currently persisted locally on-device. Production still requires trusted server authority for critical identity/authorization, core data integrity, multi-device synchronization and other production-grade controls; client-side code must not be treated as a security boundary.
 
-## Architecture
+Backend source remains separate in the private `punto25-backend` repository. The historical `mandados-android` repository also remains private.
 
-Client stack:
+## Runtime configuration
 
-- Kotlin
-- Jetpack Compose
-- Android SDK 36
-- Java 17
-- Google Maps Compose / Play Services Location
-- Firebase Authentication integration
+Supported runtime/build configuration names currently include:
 
-This repository contains client-side source only. Production backend code and server-side secrets are maintained separately in the private `punto25-backend` repository.
-
-Client-side source code must never be treated as a security boundary. Production authorization and integrity guarantees belong on trusted server-side infrastructure.
-
-## Build
-
-Open the project with a current Android Studio/JDK 17 environment and allow Gradle to resolve dependencies.
-
-Service/configuration values can be supplied through Gradle properties or environment variables where supported, including:
-
-- `MAPS_API_KEY`
 - `FIREBASE_API_KEY`
 - `FIREBASE_APP_ID`
 - `FIREBASE_PROJECT_ID`
 - `GOOGLE_WEB_CLIENT_ID`
 - `PUNTO25_API_BASE_URL`
 - `WHATSAPP_VERIFY_NUMBER`
+- `WHATSAPP_VERIFICATION_ENABLED`
 
-`ALPHA_ADMIN_PIN` defaults to an empty value when it is not supplied. Therefore ordinary builds from this repository keep local Alpha Administration disabled. The Alpha PIN is only a temporary client-side Alpha mechanism and is not a production authorization boundary.
+WhatsApp/Meta integration is intentionally paused and optional. WhatsApp verification is enabled only when `WHATSAPP_VERIFICATION_ENABLED=true` and the remaining required configuration is present; otherwise that verification path stays disabled and must not block unrelated functionality.
 
-Do not commit local credentials, private keys, keystores, service-account files or production secrets.
+Do not commit credentials, private keys, keystores, service-account files or secret values.
 
-Public-source CI validates the project with:
+## CI and code scanning
+
+`.github/workflows/ci.yml` runs for every pull request targeting `main`. Pushes to `main` also run CI except for the documented push-side path exclusions. The `test-and-build` job uses Java 17, Android SDK `platforms;android-37.0`, Build Tools `36.0.0` and Gradle `9.3.1`, then executes:
 
 ```text
 :app:testDebugUnitTest
 :app:assembleDebug
 ```
 
-This repository no longer generates or publishes signed/private Alpha APK artifacts. Owner-controlled Alpha builds are produced in a separate private build channel from an explicitly supplied 40-hex commit SHA that must resolve to this repository's canonical `main`. That private channel re-validates source provenance before accessing signing/configuration secrets, verifies the APK signature/certificate and package/version metadata, records SHA-256 and build metadata, and retains the artifact privately for a limited period.
+`.github/workflows/codeql.yml` runs CodeQL Advanced for pushes and pull requests to `main`, plus its scheduled run. It analyzes GitHub Actions and Java/Kotlin; Java/Kotlin uses a manual Android tests/build step before analysis.
+
+The active repository ruleset `Protect main` applies to the default branch. It requires normal changes through Pull Requests, requires the `test-and-build` status check and review-thread resolution, uses 0 mandatory external approvals for the current single-owner workflow, and blocks branch deletion and non-fast-forward/force-push updates.
+
+## Alpha APK packaging
+
+This repository currently contains `.github/workflows/alpha-apk.yml`. It is an owner-triggered `workflow_dispatch` flow that accepts a full 40-character target commit SHA and validates that the target exists in the trusted `main` history and is at or above the configured safe release floor.
+
+The workflow checks out the exact target SHA in detached state, cleans the working tree, uses Java 17 / Android SDK 37.0 / Build Tools 36.0.0 / Gradle 9.3.1, validates required runtime/signing configuration by name without printing secret values, runs unit tests plus the debug build, verifies the APK with `apksigner`, requires exactly one signer and the configured certificate identity, records the APK SHA-256 and `BUILD_PROVENANCE.txt`, and uploads the evidence bundle with 7-day retention.
+
+Signing material and runtime secret values are supplied through GitHub secrets; they are not stored in this README or expected to be committed to source.
 
 ## Development workflow
 
 1. branch from the latest validated `main`;
 2. implement one narrowly scoped approved change;
-3. run local/unit checks where practical;
-4. open a pull request;
-5. let CI validate tests/build;
-6. merge after checks pass;
-7. generate any controlled Alpha artifact from the exact validated source SHA in the private Alpha build channel;
-8. perform physical-device testing when required;
-9. mark the corresponding task resolved only after validation.
-
-GitHub Actions in this source repository are used for ordinary CI validation, not for distributing secret-bearing Alpha builds.
+3. run automated checks;
+4. open a Pull Request;
+5. let Android CI and CodeQL validate the exact PR state;
+6. merge only after the applicable review/authorization sequence;
+7. package an Alpha APK only from an explicitly selected trusted `main` SHA when required;
+8. reserve physical-device testing for behavior that automation cannot establish reliably.
 
 ## Security
 
-Read `SECURITY.md` and `SECURITY_AUDIT.md` before reporting vulnerabilities or handling sensitive configuration.
+Read `SECURITY.md`, `SECURITY_AUDIT.md` and `PUBLICATION_CHECKLIST.md` before handling sensitive configuration or release/publication work.
 
-The repository must not contain production signing material or backend secrets. `PUBLICATION_CHECKLIST.md` separates pre-publication gates from controls that must be applied atomically immediately after a future visibility change.
+This repository is public, but production backend code, secrets and private governance remain separate. Public source visibility does not imply production readiness, Play Store publication or a `DATA COMPATIBILITY FREEZE`.
 
 ## Copyright and usage
 
 Copyright © 2026 Ernesto Enrique Amaya. All rights reserved.
 
-This repository is intended to be publicly viewable, but it is not being released under an open-source license. See `LICENSE` and `COPYRIGHT.md`. Third-party components and media remain subject to their own terms; see `THIRD_PARTY_NOTICES.md`.
+This repository is publicly viewable, but it is not released under an open-source license. See `LICENSE` and `COPYRIGHT.md`. Third-party components and media remain subject to their own terms; see `THIRD_PARTY_NOTICES.md`.
 
 ## Contributions
 
