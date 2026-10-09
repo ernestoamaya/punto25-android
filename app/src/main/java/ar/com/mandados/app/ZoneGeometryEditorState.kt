@@ -166,6 +166,6 @@ private fun encodePolygons(polygons: List<List<GeoPoint>>, target: MutableList<S
 }
 
 internal val zoneGeometryEditorSnapshotSaver: Saver<ZoneGeometryEditorSnapshot, Any> = listSaver(
-    save = ::encodeZoneGeometryEditorSnapshot,
-    restore = ::decodeZoneGeometryEditorSnapshot
+    save = { encodeZoneGeometryEditorSnapshot(it) },
+    restore = { decodeZoneGeometryEditorSnapshot(it) }
 )
