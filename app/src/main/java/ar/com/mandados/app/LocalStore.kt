@@ -123,6 +123,7 @@ class LocalStore(context: Context) {
             themeMode = enumOrDefault(prefs.getString("theme_mode", null), ThemeMode.SYSTEM),
             operationMode = enumOrDefault(prefs.getString("operation_mode", null), OperationMode.MULTI_RIDER),
             defaultMaxConcurrentOrders = prefs.getInt("default_max_concurrent_orders", 2).coerceAtLeast(1),
+            zoneAutoResolutionEnabled = prefs.getBoolean("zone_auto_resolution_enabled", false),
             paymentConfig = payment,
             legalProfile = legal,
             zones = zones
@@ -172,6 +173,7 @@ class LocalStore(context: Context) {
             .putString("theme_mode", c.themeMode.name)
             .putString("operation_mode", c.operationMode.name)
             .putInt("default_max_concurrent_orders", c.defaultMaxConcurrentOrders)
+            .putBoolean("zone_auto_resolution_enabled", c.zoneAutoResolutionEnabled)
             .putString("payment_config", paymentJson.toString())
             .putString("legal_profile", legalJson.toString())
         e.putString("zones_json", JSONArray().apply {
