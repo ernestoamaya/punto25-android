@@ -93,7 +93,6 @@ class TargetPolicyTest(unittest.TestCase):
             self.assertTrue(policy.git_is_ancestor(first, second, str(repo)))
             self.assertFalse(policy.git_is_ancestor(divergent, second, str(repo)))
 
-
     def test_REG_PHYSICAL_APK_TARGET_001_original_base_survives_trusted_main_advance(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -115,7 +114,6 @@ class TargetPolicyTest(unittest.TestCase):
             subprocess.run(["git", "commit", "-q", "-m", "trusted main advance"], cwd=repo, check=True)
             trusted_main = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
             self.assertEqual(base, policy.git_original_pr_base(target, trusted_main, str(repo)))
-
 
 
 class BuildSurfacePolicyTest(unittest.TestCase):
@@ -181,13 +179,16 @@ class ProvenanceAndArtifactPolicyTest(unittest.TestCase):
 
     def test_REG_PHYSICAL_APK_ARTIFACT_001_exact_bundle_only(self):
         apk = f"Punto25-physical-v0.3-{TARGET}.apk"
-        policy.validate_artifact_files([apk, "SHA256SUMS.txt", "BUILD_PROVENANCE.txt"], apk)
+        expected = [apk, "SHA256SUMS.txt", "BUILD_PROVENANCE.txt"]
+        policy.validate_artifact_files(expected, apk)
         for bad in (
             [apk, "SHA256SUMS.txt"],
-            [apk, "SHA256SUMS.txt", "BUILD_PROVENANCE.txt", "extra.log"],
+            expected + [f"{apk}.idsig"],
+            expected + ["extra.log"],
         ):
-            with self.assertRaises(policy.PolicyError):
-                policy.validate_artifact_files(bad, apk)
+            with self.subTest(files=bad):
+                with self.assertRaises(policy.PolicyError):
+                    policy.validate_artifact_files(bad, apk)
 
 
 class TrustedWorkflowStaticTest(unittest.TestCase):
@@ -232,10 +233,12 @@ class TrustedWorkflowStaticTest(unittest.TestCase):
         self.assertIn("cache-disabled: true", self.build)
         self.assertNotIn("cache-provider: basic", self.build)
 
-    def test_REG_PHYSICAL_APK_SIGN_001_alignment_resign_and_single_signer_verification(self):
+    def test_REG_PHYSICAL_APK_SIGN_001_alignment_resign_v4_disabled_and_single_signer_verification(self):
         zipalign_pos = self.sign.index('"$ZIPALIGN" -f -v 4')
         sign_pos = self.sign.index('"$APKSIGNER" sign')
+        v4_pos = self.sign.index("--v4-signing-enabled false")
         self.assertLess(zipalign_pos, sign_pos)
+        self.assertGreater(v4_pos, sign_pos)
         self.assertIn('[[ "$SIGNER_COUNT" == "1" ]]', self.sign)
         self.assertIn('certificate_matches "$EXPECTED_ALPHA_CERT_SHA256" "$APK_SIGNER_CERT_SHA256"', self.sign)
         self.assertIn("DIFFERENT_CERT_SHA256", self.sign)
@@ -252,6 +255,8 @@ class TrustedWorkflowStaticTest(unittest.TestCase):
         self.assertIn("if-no-files-found: error", self.sign)
         self.assertIn("BUILD_PROVENANCE.txt", self.sign)
         self.assertIn("SHA256SUMS.txt", self.sign)
+        self.assertIn('EXPECTED_FILES=("BUILD_PROVENANCE.txt" "$APK_NAME" "SHA256SUMS.txt")', self.sign)
+        self.assertIn('[[ "${#BUNDLE_FILES[@]}" == "3" ]]', self.sign)
         self.assertIn("outputs.artifact-url", self.sign)
         self.assertIn('[[ -n "$ARTIFACT_URL" && -n "$ARTIFACT_ID" ]]', self.sign)
 
