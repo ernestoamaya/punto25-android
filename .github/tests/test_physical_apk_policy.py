@@ -93,6 +93,7 @@ class TargetPolicyTest(unittest.TestCase):
             self.assertTrue(policy.git_is_ancestor(first, second, str(repo)))
             self.assertFalse(policy.git_is_ancestor(divergent, second, str(repo)))
 
+
     def test_REG_PHYSICAL_APK_TARGET_001_original_base_survives_trusted_main_advance(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -114,6 +115,7 @@ class TargetPolicyTest(unittest.TestCase):
             subprocess.run(["git", "commit", "-q", "-m", "trusted main advance"], cwd=repo, check=True)
             trusted_main = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
             self.assertEqual(base, policy.git_original_pr_base(target, trusted_main, str(repo)))
+
 
 
 class BuildSurfacePolicyTest(unittest.TestCase):
@@ -197,7 +199,7 @@ class TrustedWorkflowStaticTest(unittest.TestCase):
         cls.validate = cls.text.split("  validate:", 1)[1].split("  build-intermediate:", 1)[0]
 
     def test_REG_PHYSICAL_APK_TRUSTED_WORKFLOW_001_source_is_current_main_and_target_cannot_replace_policy(self):
-        self.assertIn("if: github.ref == 'refs/heads/main'", self.validate)
+        self.assertIn('if: github.ref == \'refs/heads/main\'', self.validate)
         self.assertIn('[[ "$WORKFLOW_SOURCE_SHA" == "$TRUSTED_MAIN_SHA" ]]', self.validate)
         self.assertIn(".github/scripts/physical_apk_policy.py validate-pr", self.validate)
         self.assertIn(".github/scripts/physical_apk_policy.py validate-paths", self.validate)
@@ -227,6 +229,8 @@ class TrustedWorkflowStaticTest(unittest.TestCase):
         self.assertNotIn("WHATSAPP_", self.build)
         self.assertNotIn("testDebugUnitTest", self.build)
         self.assertIn("gradle :app:assembleDebug", self.build)
+        self.assertIn("cache-disabled: true", self.build)
+        self.assertNotIn("cache-provider: basic", self.build)
 
     def test_REG_PHYSICAL_APK_SIGN_001_alignment_resign_and_single_signer_verification(self):
         zipalign_pos = self.sign.index('"$ZIPALIGN" -f -v 4')
