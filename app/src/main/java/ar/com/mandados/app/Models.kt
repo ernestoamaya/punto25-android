@@ -113,6 +113,7 @@ data class AdminConfig(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val operationMode: OperationMode = OperationMode.MULTI_RIDER,
     val defaultMaxConcurrentOrders: Int = 2,
+    val zoneAutoResolutionEnabled: Boolean = false,
     val paymentConfig: PaymentConfig = PaymentConfig(),
     val legalProfile: LegalProfile = LegalProfile(),
     val zones: List<ZoneConfig> = defaultZones()
