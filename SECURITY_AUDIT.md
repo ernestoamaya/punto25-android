@@ -1,64 +1,107 @@
-# Punto25 pre-publication security audit
+# Punto25 security audit and current repository posture
 
-Audit target: canonical `punto25-android` source repository at Android baseline `0.3-alpha3-dev3.9` / versionCode `16` / applicationId `ar.com.mandados.app`. The canonical branch is `main`; the exact publish-state SHA must be verified again immediately before any visibility change.
+Current Android baseline: `0.3-alpha3-dev3.9` / versionCode `16` / applicationId `ar.com.mandados.app`. The canonical branch is `main`.
 
-## Repository separation
+This document separates **historical pre-publication audit evidence** from the **current state of the already-public Android repository**. Historical scans are evidence about the refs/objects available at the time they were performed; they are not an immutable certification of later commits.
 
-The historical `mandados-android` repository remains private because its history contains retired Alpha signing material and previously included backend source.
+## A. Historical pre-publication audit
 
-Server source remains separate in the private `punto25-backend` repository.
+### Repository separation and cleanup
 
-Secret-bearing Alpha APK generation has been separated from this source repository. A dedicated private Alpha build channel performs owner-controlled signed builds from an explicitly supplied source commit; this source repository retains ordinary CI only.
+The historical `mandados-android` repository remains private because its history contains retired Alpha signing material and previously included backend source. The current backend repository `punto25-backend` also remains private.
 
-This source repository must not contain signing keystores, signing passwords, private Alpha PIN values, backend secrets or service-account credentials.
+`PREPUB-SCAN`, `PREPUB-CLEANUP` and `PREPUB-FINAL-SCAN` were completed before the repository became public. The all-ref/all-object scans covered branches, tags, accessible `refs/pull/*` refs and other Git objects exposed through fetch at the time of each scan. Gitleaks 8.30.1 plus complementary path/material and credential-pattern inventories found no active secret, signing material or backend source in that audited fetchable universe.
 
-## Completed pre-publication scans and cleanup
+The retired Alpha Admin PIN was detected only as historical material. It was classified **HISTORICAL / MITIGATED** and is not a current authentication credential. The current Android build no longer defines or consumes `ALPHA_ADMIN_PIN`.
 
-`PREPUB-SCAN`, `PREPUB-CLEANUP` and `PREPUB-FINAL-SCAN` were completed before this documentation-finalization change.
+Older Alpha artifacts and the old secret-bearing source-repository Alpha workflow were removed during pre-publication cleanup. At that historical point, signed Alpha generation was moved away from the source repository while the public-source transition was being prepared.
 
-The all-ref/all-object scans covered all branches, tags, accessible `refs/pull/*` refs and other Git objects that GitHub exposed through fetch at the time of each scan. Gitleaks 8.30.1 plus complementary path/material and credential-pattern inventories found no active secret, signing material or backend source in the audited fetchable universe.
+The final all-object scan snapshot preceding later work covered 33 fetchable refs, 82 distinct commits and 494 distinct Git objects. `git fsck --full --no-reflogs` reported no unreachable or dangling objects in that fetched clone, and Gitleaks reported no new findings.
 
-The known retired Alpha Admin PIN was detected only as historical material. It was safely compared against the current private Alpha configuration without displaying either value or a PIN-derived fingerprint; it is different from the current value and remains classified as **HISTORICAL / MITIGATED**. It is not a current authentication credential.
+Technical limitation: those audits could only make claims about refs and objects GitHub exposed through accessible fetch paths. They could not certify hypothetical server-internal objects unavailable through any ref/fetch path, and they do not automatically certify commits created after the scan.
 
-Older Alpha artifacts created by the source repository were explicitly removed. The source repository's old secret-bearing Alpha workflow was removed; current source CI is separated from the private Alpha signing/configuration channel.
+## B. Current public-repository posture
 
-The final all-object scan snapshot preceding later documentation-only work covered 33 fetchable refs, 82 distinct commits and 494 distinct Git objects. `git fsck --full --no-reflogs` reported no unreachable or dangling objects in that fetched clone, and Gitleaks reported no new findings. Subsequent changes must therefore be checked as deltas, and the future publication gate must verify the exact final SHA rather than treating that earlier scan as an immutable certification of later commits.
+### Repository visibility and branch controls
 
-Technical limitation: these audits can only make claims about refs and objects that GitHub exposes through accessible refs/fetch and that physically reach the audit clone. They cannot certify hypothetical server-internal Git objects that GitHub does not expose through any ref or fetch path.
+`ernestoamaya/punto25-android` is currently **PUBLIC**. The historical `mandados-android` and current `punto25-backend` repositories remain private.
 
-## Current source and Alpha security posture
+The active repository ruleset `Protect main` targets the default branch and currently enforces:
 
-Ordinary builds receive an empty `ALPHA_ADMIN_PIN`, which keeps local Alpha Administration disabled. A PIN compiled into an Alpha client is only a temporary Alpha convenience and must never be treated as a production authorization boundary; production Admin access requires authenticated server-side authorization/RBAC.
+- non-fast-forward/force-push protection;
+- branch-deletion protection;
+- normal changes through Pull Requests;
+- 0 mandatory external approvals for the current single-owner workflow;
+- required review-thread resolution;
+- required status check `test-and-build`.
 
-Rider password material is stored as a salted PBKDF2-derived hash in the current local Alpha model; production authorization and account security still require trusted backend authority.
+The ruleset, rather than the classic branch-protection endpoint, is the authoritative current protection mechanism.
 
-The first controlled private Alpha build was successfully validated, including package/version/source metadata, signer/certificate verification and APK hash evidence. Physical-device update validation was also completed: the validated Alpha build updated the installed app without uninstalling it or deleting app data and opened normally.
+### Android stack and maps
 
-While the source repository remains private, the Alpha channel uses a temporary least-privilege read credential for source checkout only, with checkout credentials not persisted. After this source repository becomes public, that bootstrap credential must be removed from the workflow, deleted from repository secrets and revoked only after the private Alpha workflow has been validated without it.
+The current client uses Kotlin / Jetpack Compose with compileSdk `37`, targetSdk `36`, minSdk `26`, Java `17`, Android Gradle Plugin `9.1.1` and Kotlin/Compose plugin `2.4.20`.
 
-## CI and repository hardening
+Internal maps use **MapLibre Compose** with the **OpenFreeMap Liberty** style. Google Maps Compose/SDK and `MAPS_API_KEY` are not part of the current app configuration. Google Play Services Location remains a dependency for Android location access and must not be confused with the removed Google Maps renderer/API-key integration.
 
-The source repository retains only ordinary Android CI for build/test validation. CI uses least-privilege `contents: read`, immutable full commit SHAs for third-party Actions, cancellation of superseded runs, and no Alpha signing/PIN secrets.
+### Authentication and authorization
 
-The CI command remains:
+Customer authentication uses Firebase Authentication / Google Identity on the default Firebase app.
+
+Administration no longer uses a local Alpha PIN. Admin authentication is intentionally isolated in a secondary Firebase app/auth context (`punto25-admin-auth`) and uses a Firebase ID token to call the backend endpoint `/v1/admin/access`.
+
+The client-side access policy is fail-closed:
+
+- HTTP 200 with `authorized=true` → `AUTHORIZED`;
+- 401/403 → `UNAUTHORIZED`;
+- missing token, malformed/unexpected response, network/backend errors or other availability failures → no Admin authorization (`UNAUTHORIZED` or `UNAVAILABLE`).
+
+Only `AUTHORIZED` enables the transient Admin session. Client-side checks are not a production security boundary; trusted backend authority remains required for production authorization and integrity.
+
+### WhatsApp / Meta
+
+Meta/WhatsApp integration remains intentionally paused and optional. The app still contains optional verification scaffolding. WhatsApp verification requires `WHATSAPP_VERIFICATION_ENABLED=true` plus the other required configuration; if not configured, the verification flow remains disabled and unrelated functionality must continue to work.
+
+WhatsApp has therefore **not** been removed completely, but it is not a mandatory dependency of current Alpha operation.
+
+### CI and CodeQL
+
+`.github/workflows/ci.yml` currently runs Android CI for every Pull Request targeting `main`. Pushes to `main` also run CI except for the workflow's documented push-side path exclusions. The `test-and-build` job uses least-privilege `contents: read`, pinned Action SHAs, Java 17, Android SDK `platforms;android-37.0`, Build Tools `36.0.0` and Gradle `9.3.1`, then executes:
 
 ```text
 :app:testDebugUnitTest
 :app:assembleDebug
 ```
 
-PR #15 removed `paths-ignore` from the `pull_request` trigger while preserving the push-side path exclusions. Therefore the real `test-and-build` job now runs for every pull request targeting `main` and is ready to become a required status check after the repository becomes public.
+`.github/workflows/codeql.yml` currently provides **CodeQL Advanced** on pushes and Pull Requests to `main` plus a scheduled run. It analyzes GitHub Actions and Java/Kotlin. Java/Kotlin uses a manual Android tests/build step before CodeQL analysis.
 
-GitHub Actions repository settings were hardened to read-only default workflow-token permissions, disabled Actions-created/approved pull requests, and require Actions references to use full-length commit SHAs.
+CodeQL is therefore an active current control, not a feature deferred until publication.
 
-Dependency graph, Dependabot alerts, Dependabot security updates and automatic Gradle dependency submission are enabled. The first automatic Gradle dependency-submission run completed successfully against canonical `main`.
+### Current Alpha APK packaging
 
-Protected-main rulesets, secret scanning/push protection, CodeQL/code scanning and private vulnerability reporting remain deferred only where GitHub Free does not make the required capability available while this personal repository remains private. No paid plan, billing or trial was enabled.
+The current public source repository contains `.github/workflows/alpha-apk.yml`. Signed Alpha packaging is no longer accurately described as existing only in a separate private build channel.
 
-## Remaining publication gates
+The workflow is manually triggered with `workflow_dispatch` and a full 40-character `target_sha`. It verifies target existence, ancestry in trusted `main` and the configured safe release floor; checks out the exact target SHA detached; cleans the work tree; uses Java 17 / Android SDK 37.0 / Build Tools 36.0.0 / Gradle 9.3.1; validates required runtime/signing configuration by name; runs unit tests and `assembleDebug`; verifies the APK via `apksigner`; requires exactly one signer and the configured certificate identity; records SHA-256 and `BUILD_PROVENANCE.txt`; and uploads the APK/evidence bundle with 7-day retention.
 
-Before changing visibility, the owner must complete the final presentation review and an exact-SHA preflight confirming repository state, documentation, CI and absence of unexpected concurrent changes.
+Runtime/signing secrets are referenced through GitHub secrets and environment variables. This audit does not retrieve or reproduce secret values. The current configuration files inspected during this documentation reconciliation expose names/configuration only, not signing material or secret values.
 
-If publication is authorized, the visibility change is valid only as an atomic operation followed immediately by the controls listed in `PUBLICATION_CHECKLIST.md`: protect `main`, require `test-and-build`, block force-push/delete, enable and verify the public-repository security features available at no cost, validate the private Alpha channel without its temporary source-read credential, then remove that repository secret and revoke the temporary token.
+### Current limitations and production gap
 
-This document records engineering controls and findings; it is not a legal opinion or a substitute for a professional security assessment.
+Punto25 remains Alpha software. Local on-device persistence and client-side business logic are not sufficient production authority. Production still requires appropriate trusted backend authority for critical data, identity/authorization, synchronization, financial integrity and operational hardening.
+
+Play Store publication, production privacy/compliance review, final disclosures/permissions review and `DATA COMPATIBILITY FREEZE` remain future milestones.
+
+## Controls requiring current settings verification
+
+Some GitHub security settings are not established by repository files or the ruleset data inspected in this reconciliation. Their current enabled/disabled state must be verified separately at the applicable publication/production milestone rather than inferred from historical documentation:
+
+- secret scanning;
+- push protection;
+- private vulnerability reporting;
+- current Dependabot alert/security-update settings;
+- current automatic dependency-submission settings.
+
+Historical documentation records that several dependency/security settings had been enabled during pre-publication work, but this document does not convert that historical observation into an unverified present-tense guarantee.
+
+## Scope statement
+
+This document records engineering controls and findings. It is not a legal opinion, a penetration test, or a substitute for an independent professional security assessment. Any future release/publication decision must verify the exact target SHA and then-current repository/service configuration.
