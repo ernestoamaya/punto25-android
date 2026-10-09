@@ -189,7 +189,10 @@ internal fun LocationPickerScreen(
         }
         Spacer(Modifier.height(8.dp))
         AssistBox(
-            "El pin y la dirección escrita son datos independientes. Mover el pin no cambia automáticamente la dirección ni la zona tarifaria."
+            if (c.config.zoneAutoResolutionEnabled)
+                "El pin se usa para determinar automáticamente la zona tarifaria. La dirección escrita sigue siendo descriptiva e independiente."
+            else
+                "El pin y la dirección escrita son datos independientes. Mover el pin no cambia automáticamente la dirección ni la zona tarifaria."
         )
     }
 }
