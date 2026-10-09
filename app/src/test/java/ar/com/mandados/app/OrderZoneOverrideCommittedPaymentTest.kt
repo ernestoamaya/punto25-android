@@ -202,6 +202,55 @@ class OrderZoneOverrideCommittedPaymentTest {
         assertTrue(restarted.paymentForOrder(original.id) == null)
     }
 
+    @Test
+    fun `REG-ZONE-OVERRIDE-PAYMENT-001 duplicate payments fail closed without any mutation`() {
+        val cfg = testConfig()
+        val original = orderFromDraft("PAY-DUPLICATE", deliveryDraft("a", "a"), cfg)
+        val firstPayment = payment(original).copy(id = "PAY-${original.id}-A")
+        val secondPayment = payment(original).copy(id = "PAY-${original.id}-B")
+        val store = LocalStore(context)
+        store.saveConfig(cfg)
+        store.saveOrdersAndPayments(listOf(original), listOf(firstPayment, secondPayment))
+        val c = MandadosController(context)
+
+        val beforeOrder = c.order(original.id)!!
+        val beforeOrders = c.orders
+        val beforePayments = c.payments
+        val beforeEvents = beforeOrder.events
+        assertEquals(2, beforePayments.count { it.orderId == original.id })
+
+        val preview = c.previewOrderZoneOverride(
+            original.id,
+            OrderZonePoint.DESTINATION,
+            OrderZoneOverrideSelection.Catalog("b")
+        )!!
+        assertFalse(preview.allowed)
+
+        assertFalse(
+            c.applyOrderZoneOverride(
+                original.id,
+                OrderZonePoint.DESTINATION,
+                OrderZoneOverrideSelection.Catalog("b"),
+                "Pagos duplicados deben fallar cerrado"
+            )
+        )
+
+        assertEquals(beforeOrder, c.order(original.id))
+        assertEquals(beforeOrders, c.orders)
+        assertEquals(beforePayments, c.payments)
+        assertEquals(beforeEvents, c.order(original.id)!!.events)
+        assertTrue(c.order(original.id)!!.zoneOverrides.isEmpty())
+        assertEquals(beforeOrders, LocalStore(context).loadOrders())
+        assertEquals(beforePayments, LocalStore(context).loadPayments())
+
+        val restarted = MandadosController(context)
+        assertEquals(beforeOrder, restarted.order(original.id))
+        assertEquals(beforeEvents, restarted.order(original.id)!!.events)
+        assertTrue(restarted.order(original.id)!!.zoneOverrides.isEmpty())
+        assertEquals(beforePayments, restarted.payments)
+        assertEquals(2, restarted.payments.count { it.orderId == original.id })
+    }
+
     private fun testConfig(): AdminConfig = AdminConfig(
         operationMode = OperationMode.MULTI_RIDER,
         zones = listOf(
