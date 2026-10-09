@@ -167,7 +167,8 @@ class MandadosController(context: Context) {
         store.clearCustomer()
     }
 
-    fun updateConfig(newConfig: AdminConfig) {
+    fun updateConfig(newConfig: AdminConfig): Boolean {
+        if (newConfig.zoneAutoResolutionEnabled && !zoneAutoResolutionConfigIsValid(newConfig.zones)) return false
         val switchingToSimple = config.operationMode != OperationMode.SIMPLE_WHATSAPP &&
             newConfig.operationMode == OperationMode.SIMPLE_WHATSAPP
         config = newConfig
@@ -176,7 +177,11 @@ class MandadosController(context: Context) {
             riders = riders.map { it.copy(available = false, availableUntilAt = null) }
             store.saveRiders(riders)
         }
+        return true
     }
+
+    fun setZoneAutoResolutionEnabled(enabled: Boolean): Boolean =
+        updateConfig(config.copy(zoneAutoResolutionEnabled = enabled))
 
     fun resetDraft(type: ServiceType) {
         val category = if (type == ServiceType.SHOPPING) ServiceCategory.PURCHASE else ServiceCategory.ERRAND
@@ -196,8 +201,7 @@ class MandadosController(context: Context) {
         val clean = name.trim()
         if (clean.isBlank()) return false
         val id = "zone-${System.currentTimeMillis()}"
-        updateConfig(config.copy(zones = config.zones + ZoneConfig(id, clean, description.trim(), category.trim().ifBlank { "OTRAS" }, price.coerceAtLeast(0), true)))
-        return true
+        return updateConfig(config.copy(zones = config.zones + ZoneConfig(id, clean, description.trim(), category.trim().ifBlank { "OTRAS" }, price.coerceAtLeast(0), true)))
     }
 
     fun updateZone(id: String, name: String, description: String, category: String, price: Int, enabled: Boolean): Boolean {
@@ -213,10 +217,9 @@ class MandadosController(context: Context) {
         )
         if (!canApplyZoneMetadataUpdate(config, current, candidate)) return false
         if (candidate == current) return true
-        updateConfig(config.copy(zones = config.zones.map {
+        return updateConfig(config.copy(zones = config.zones.map {
             if (it.id == id) candidate else it
         }))
-        return true
     }
 
     fun order(id: String?): LocalOrder? = orders.firstOrNull { it.id == id }
@@ -250,21 +253,28 @@ class MandadosController(context: Context) {
         overrides: Map<OrderZonePoint, OrderZoneOverride> = emptyMap()
     ): PricingResult = calculateOrderPricing(d, overrides, config)
 
+    fun resolvedNewOrderDraft(d: OrderDraft = draft): ZoneAutoDraftResolution =
+        resolveDraftZonesAutomatically(d, config)
+
+    fun pricingForNewOrder(d: OrderDraft = draft): PricingResult =
+        calculateOrderPricing(resolvedNewOrderDraft(d).draft, emptyMap(), config)
+
     fun createOrder(): OrderCreationResult {
         if (!config.acceptingOrders) return OrderCreationResult.Blocked(config.closedMessage)
 
         val c = requireNotNull(customer)
-        val p = pricing(draft)
+        val effectiveDraft = resolvedNewOrderDraft(draft).draft
+        val p = calculateOrderPricing(effectiveDraft, emptyMap(), config)
         val id = newPublicCode()
         val created = nowText()
         val status = if (p.needsQuote) OrderStatus.AWAITING_QUOTE else OrderStatus.PENDING
-        val detail = buildDetail(draft, p)
-        val message = buildWhatsAppMessage(id, c, draft, p)
+        val detail = buildDetail(effectiveDraft, p)
+        val message = buildWhatsAppMessage(id, c, effectiveDraft, p)
         val order = LocalOrder(
             id = id,
             createdAt = created,
-            serviceType = draft.serviceType,
-            category = draft.category,
+            serviceType = effectiveDraft.serviceType,
+            category = effectiveDraft.category,
             operationMode = config.operationMode,
             status = status,
             customerName = c.name,
@@ -277,10 +287,10 @@ class MandadosController(context: Context) {
             rainAmount = p.rainAmount,
             totalAmount = p.totalAmount,
             whatsappMessage = message,
-            originLocation = draft.originLocation,
-            destinationLocation = draft.destinationLocation,
-            storeLocation = draft.storeLocation,
-            prePickupLocation = draft.prePickupLocation,
+            originLocation = effectiveDraft.originLocation,
+            destinationLocation = effectiveDraft.destinationLocation,
+            storeLocation = effectiveDraft.storeLocation,
+            prePickupLocation = effectiveDraft.prePickupLocation,
             events = listOf(
                 OrderEvent(
                     type = OrderEventType.CREATED,
@@ -290,26 +300,26 @@ class MandadosController(context: Context) {
                     actor = "CLIENTE"
                 )
             ),
-            originAddress = draft.originAddress,
-            originReference = draft.originReference,
-            originZoneId = draft.originZoneId,
-            destinationAddress = draft.destinationAddress,
-            destinationReference = draft.destinationReference,
-            destinationZoneId = draft.destinationZoneId,
-            carriedItem = draft.carriedItem,
-            instructionType = draft.instructionType,
-            purchaseDescription = draft.purchaseDescription,
-            purchaseMaxAmount = draft.purchaseMaxAmount,
-            storeName = draft.storeName,
-            storeAddress = draft.storeAddress,
-            storeZoneId = draft.storeZoneId,
-            purchasePayment = draft.purchasePayment,
-            prePickupAddress = draft.prePickupAddress,
-            prePickupReference = draft.prePickupReference,
-            prePickupZoneId = draft.prePickupZoneId,
-            sameDeliveryAsPrePickup = draft.sameDeliveryAsPrePickup,
-            deliveryPayment = draft.deliveryPayment,
-            notes = draft.notes
+            originAddress = effectiveDraft.originAddress,
+            originReference = effectiveDraft.originReference,
+            originZoneId = effectiveDraft.originZoneId,
+            destinationAddress = effectiveDraft.destinationAddress,
+            destinationReference = effectiveDraft.destinationReference,
+            destinationZoneId = effectiveDraft.destinationZoneId,
+            carriedItem = effectiveDraft.carriedItem,
+            instructionType = effectiveDraft.instructionType,
+            purchaseDescription = effectiveDraft.purchaseDescription,
+            purchaseMaxAmount = effectiveDraft.purchaseMaxAmount,
+            storeName = effectiveDraft.storeName,
+            storeAddress = effectiveDraft.storeAddress,
+            storeZoneId = effectiveDraft.storeZoneId,
+            purchasePayment = effectiveDraft.purchasePayment,
+            prePickupAddress = effectiveDraft.prePickupAddress,
+            prePickupReference = effectiveDraft.prePickupReference,
+            prePickupZoneId = effectiveDraft.prePickupZoneId,
+            sameDeliveryAsPrePickup = effectiveDraft.sameDeliveryAsPrePickup,
+            deliveryPayment = effectiveDraft.deliveryPayment,
+            notes = effectiveDraft.notes
         )
         val nextOrders = listOf(order) + orders
         if (order.operationMode == OperationMode.MULTI_RIDER) {
