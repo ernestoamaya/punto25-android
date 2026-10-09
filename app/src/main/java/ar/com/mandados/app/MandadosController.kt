@@ -1524,7 +1524,7 @@ class MandadosController(context: Context) {
             isException = current.isException || current.originRuleId != null
         )
         if (concreteShifts.any { it.id != id && ShiftSchedulePolicy.overlaps(it, candidate) }) {
-            return@synchronized "La regla se superpone con otro horario configurado, incluso considerando cruces de medianoche."
+            return@synchronized "El turno editado se superpone con otro turno concreto."
         }
         val final = concreteShifts.map { if (it.id == id) candidate else it }
         if (!shiftStoreV2.saveConcreteShifts(final)) return@synchronized "No se pudo guardar el turno."
@@ -2105,7 +2105,7 @@ class MandadosController(context: Context) {
     }
 
     private fun buildWhatsAppMessage(id: String, c: Customer, d: OrderDraft, p: PricingResult): String = buildString {
-        appendLine("Punto25 · NUEVA SOLICUD")
+        appendLine("Punto25 · NUEVA SOLICITUD")
         appendLine(id)
         appendLine()
         appendLine("Cliente: ${c.name}")
