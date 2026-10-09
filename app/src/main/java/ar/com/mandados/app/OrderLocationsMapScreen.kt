@@ -189,6 +189,8 @@ internal fun AdminStructuredOrderPresentation(
         StructuredOrderPresentation(c, order, Modifier.padding(12.dp))
     }
 
+    AdminOrderZoneOverridesPanel(c, order)
+
     if (locations.isNotEmpty()) {
         Spacer(Modifier.height(10.dp))
         Text("UBICACIONES", fontWeight = FontWeight.Bold)

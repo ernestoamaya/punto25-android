@@ -246,7 +246,8 @@ class LocalStore(context: Context) {
                             prePickupZoneId = o.optString("prePickupZoneId", ""),
                             sameDeliveryAsPrePickup = o.optBoolean("sameDeliveryAsPrePickup", false),
                             deliveryPayment = enumOrDefault(o.optString("deliveryPayment", null), DeliveryPaymentMethod.CASH),
-                            notes = o.optString("notes", "")
+                            notes = o.optString("notes", ""),
+                            zoneOverrides = o.optOrderZoneOverrides()
                         )
                     )
                 }
@@ -303,6 +304,16 @@ class LocalStore(context: Context) {
                 put("sameDeliveryAsPrePickup", o.sameDeliveryAsPrePickup)
                 put("deliveryPayment", o.deliveryPayment.name)
                 put("notes", o.notes)
+                put("zoneOverrides", JSONObject().apply {
+                    o.zoneOverrides.forEach { (point, override) ->
+                        put(point.name, JSONObject().apply {
+                            put("source", override.source.name)
+                            put("catalogZoneId", override.catalogZoneId ?: JSONObject.NULL)
+                            put("name", override.name)
+                            put("price", override.price)
+                        })
+                    }
+                })
                 put("events", JSONArray().apply {
                     o.events.forEach { event ->
                         put(JSONObject().apply {
@@ -635,6 +646,30 @@ class LocalStore(context: Context) {
                         actor = e.optStringOrNull("actor")
                     )
                 )
+            }
+        }
+    }
+
+    private fun JSONObject.optOrderZoneOverrides(): Map<OrderZonePoint, OrderZoneOverride> {
+        val source = optJSONObject("zoneOverrides") ?: return emptyMap()
+        return buildMap {
+            OrderZonePoint.entries.forEach { point ->
+                val item = source.optJSONObject(point.name) ?: return@forEach
+                val parsed = runCatching {
+                    val overrideSource = enumValueOf<OrderZoneOverrideSource>(item.optString("source", ""))
+                    val name = item.optString("name", "").trim()
+                    val price = item.optInt("price", 0)
+                    val catalogZoneId = item.optStringOrNull("catalogZoneId")
+                    require(name.isNotBlank() && price > 0)
+                    if (overrideSource == OrderZoneOverrideSource.CATALOG) require(!catalogZoneId.isNullOrBlank())
+                    OrderZoneOverride(
+                        source = overrideSource,
+                        catalogZoneId = if (overrideSource == OrderZoneOverrideSource.CATALOG) catalogZoneId else null,
+                        name = name,
+                        price = price
+                    )
+                }.getOrNull() ?: return@forEach
+                put(point, parsed)
             }
         }
     }

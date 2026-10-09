@@ -47,6 +47,8 @@ enum class PaymentChannel { CASH, RIDER_TRANSFER, QR_INTEROPERABLE, ONLINE_CHECK
 enum class PaymentStatus { PENDING, DECLARED, PROOF_UPLOADED, CONFIRMED, IN_REVIEW, APPROVED, REJECTED, REFUNDED }
 enum class TipStatus { NONE, SELECTED, TRANSFER_DECLARED, CONFIRMED }
 enum class RiderInvitationStatus { PENDING, USED, EXPIRED, CANCELLED }
+enum class OrderZonePoint { ORIGIN, DESTINATION, STORE, PRE_PICKUP }
+enum class OrderZoneOverrideSource { CATALOG, AD_HOC }
 
 data class GeoPoint(val latitude: Double, val longitude: Double)
 
@@ -57,6 +59,13 @@ data class ZoneConfig(
     val category: String,
     val price: Int = 0,
     val enabled: Boolean = true
+)
+
+data class OrderZoneOverride(
+    val source: OrderZoneOverrideSource,
+    val catalogZoneId: String? = null,
+    val name: String,
+    val price: Int
 )
 
 data class PaymentConfig(
@@ -243,7 +252,8 @@ data class LocalOrder(
     val prePickupZoneId: String = "",
     val sameDeliveryAsPrePickup: Boolean = false,
     val deliveryPayment: DeliveryPaymentMethod = DeliveryPaymentMethod.CASH,
-    val notes: String = ""
+    val notes: String = "",
+    val zoneOverrides: Map<OrderZonePoint, OrderZoneOverride> = emptyMap()
 )
 
 sealed interface OrderCreationResult {
