@@ -402,10 +402,12 @@ jobs:
 
           # Android requires zipalign before apksigner. apksigner strips pre-existing
           # signatures by default, so the debug-signed intermediate is re-signed rather
-          # than appended with an additional signer.
+          # than appended with an additional signer. V4 is explicitly disabled because
+          # the physical evidence bundle intentionally contains no .idsig sidecar.
           "$ZIPALIGN" -f -v 4 "$INTERMEDIATE_APK" "$ALIGNED_APK" >/dev/null
 
           "$APKSIGNER" sign \
+            --v4-signing-enabled false \
             --ks "$KEYSTORE_PATH" \
             --ks-pass env:ALPHA_KEYSTORE_PASSWORD \
             --ks-key-alias "$ALPHA_KEY_ALIAS" \
