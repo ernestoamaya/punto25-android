@@ -1,0 +1,547 @@
+name: Pre-merge Physical APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Open same-repo PR number targeting main"
+        required: true
+        type: string
+      target_sha:
+        description: "Exact full 40-character lowercase HEAD SHA of that PR"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: physical-apk-${{ github.repository }}-${{ inputs.pr_number }}-${{ inputs.target_sha }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate trusted target
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      workflow_source_sha: ${{ steps.policy.outputs.workflow_source_sha }}
+      trusted_main_sha: ${{ steps.policy.outputs.trusted_main_sha }}
+      pr_number: ${{ steps.policy.outputs.pr_number }}
+      pr_base_sha: ${{ steps.policy.outputs.pr_base_sha }}
+      target_sha: ${{ steps.policy.outputs.target_sha }}
+    steps:
+      - name: Checkout trusted workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run trusted policy regression tests
+        run: python3 .github/tests/test_physical_apk_policy.py
+
+      - name: Validate PR target, ancestry and build surface
+        id: policy
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REQUESTED_PR_NUMBER: ${{ inputs.pr_number }}
+          REQUESTED_TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+
+          [[ "$REQUESTED_PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+            echo "pr_number must be a positive decimal integer." >&2
+            exit 1
+          }
+          [[ "$REQUESTED_TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "target_sha must be a full lowercase 40-character SHA-1." >&2
+            exit 1
+          }
+
+          git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --force --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+
+          WORKFLOW_SOURCE_SHA="$(git rev-parse HEAD)"
+          TRUSTED_MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
+
+          [[ "$WORKFLOW_SOURCE_SHA" == "$GITHUB_SHA" ]] || {
+            echo "Workflow checkout does not match GitHub workflow source SHA." >&2
+            exit 1
+          }
+          [[ "$WORKFLOW_SOURCE_SHA" == "$TRUSTED_MAIN_SHA" ]] || {
+            echo "Workflow source is not the current trusted main HEAD." >&2
+            exit 1
+          }
+
+          PR_JSON="$RUNNER_TEMP/physical-pr.json"
+          curl --fail --silent --show-error --location \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GITHUB_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pulls/${REQUESTED_PR_NUMBER}" \
+            --output "$PR_JSON"
+
+          python3 .github/scripts/physical_apk_policy.py validate-pr \
+            --pr-json "$PR_JSON" \
+            --repository "$GITHUB_REPOSITORY" \
+            --pr-number "$REQUESTED_PR_NUMBER" \
+            --target-sha "$REQUESTED_TARGET_SHA"
+
+          git fetch --force --no-tags origin \
+            "+refs/pull/${REQUESTED_PR_NUMBER}/head:refs/remotes/origin/physical-pr-${REQUESTED_PR_NUMBER}"
+
+          FETCHED_PR_HEAD_SHA="$(git rev-parse "refs/remotes/origin/physical-pr-${REQUESTED_PR_NUMBER}")"
+          [[ "$FETCHED_PR_HEAD_SHA" == "$REQUESTED_TARGET_SHA" ]] || {
+            echo "Fetched PR HEAD no longer matches requested target_sha." >&2
+            exit 1
+          }
+
+          git cat-file -e "${REQUESTED_TARGET_SHA}^{commit}" 2>/dev/null || {
+            echo "Requested target_sha is not an existing commit." >&2
+            exit 1
+          }
+
+          # Derive the PR's original branch point from first-parent history and
+          # require it to equal the target/main merge-base. This intentionally
+          # does not trust the mutable current HEAD of main as the PR base SHA.
+          PR_BASE_SHA="$(
+            python3 .github/scripts/physical_apk_policy.py derive-base \
+              --target-sha "$REQUESTED_TARGET_SHA" \
+              --trusted-main-sha "$TRUSTED_MAIN_SHA" \
+              --repo "$GITHUB_WORKSPACE"
+          )"
+          [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "Unable to derive canonical original PR base SHA." >&2
+            exit 1
+          }
+
+          CHANGED_PATHS="$RUNNER_TEMP/physical-changed-paths.zlist"
+          git diff --name-only -z "$PR_BASE_SHA" "$REQUESTED_TARGET_SHA" > "$CHANGED_PATHS"
+          python3 .github/scripts/physical_apk_policy.py validate-paths --nul-file "$CHANGED_PATHS"
+
+          echo "Trusted validation passed for PR #${REQUESTED_PR_NUMBER} and exact target ${REQUESTED_TARGET_SHA}."
+          echo "workflow_source_sha=$WORKFLOW_SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "trusted_main_sha=$TRUSTED_MAIN_SHA" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$REQUESTED_PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "pr_base_sha=$PR_BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$REQUESTED_TARGET_SHA" >> "$GITHUB_OUTPUT"
+
+  build-intermediate:
+    name: Build exact target without signing secrets
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      checked_out_sha: ${{ steps.checkout_guard.outputs.checked_out_sha }}
+      version_name: ${{ steps.metadata.outputs.version_name }}
+      version_code: ${{ steps.metadata.outputs.version_code }}
+      application_id: ${{ steps.metadata.outputs.application_id }}
+      apk_name: ${{ steps.metadata.outputs.apk_name }}
+      artifact_name: ${{ steps.metadata.outputs.artifact_name }}
+      intermediate_sha256: ${{ steps.intermediate.outputs.intermediate_sha256 }}
+    steps:
+      - name: Checkout exact validated target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.validate.outputs.target_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact checkout
+        id: checkout_guard
+        shell: bash
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+          [[ "$CHECKED_OUT_SHA" == "$TARGET_SHA" ]] || {
+            echo "Checked-out target does not match validated target_sha." >&2
+            exit 1
+          }
+          echo "checked_out_sha=$CHECKED_OUT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve immutable target metadata
+        id: metadata
+        shell: bash
+        env:
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          VERSION_CODE="$(sed -n 's/^[[:space:]]*versionCode = \([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -n 1)"
+          APPLICATION_ID="$(sed -n 's/^[[:space:]]*applicationId = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+
+          [[ -n "$VERSION_NAME" && -n "$VERSION_CODE" && -n "$APPLICATION_ID" ]] || {
+            echo "Unable to resolve target Android metadata." >&2
+            exit 1
+          }
+          [[ "$APPLICATION_ID" == "ar.com.mandados.app" ]] || {
+            echo "Unexpected applicationId; refusing physical packaging." >&2
+            exit 1
+          }
+
+          ARTIFACT_NAME="Punto25-physical-v${VERSION_NAME}-${TARGET_SHA}"
+          APK_NAME="${ARTIFACT_NAME}.apk"
+
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "application_id=$APPLICATION_ID" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Java 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'platform-tools platforms;android-37.0 build-tools;36.0.0'
+
+      - name: Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: '9.3.1'
+          cache-provider: basic
+
+      - name: Build intermediate APK with allowlisted Alpha client configuration
+        shell: bash
+        env:
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          PUNTO25_API_BASE_URL: ${{ secrets.PUNTO25_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import sys
+
+          allowed = {
+              "FIREBASE_API_KEY",
+              "FIREBASE_APP_ID",
+              "FIREBASE_PROJECT_ID",
+              "GOOGLE_WEB_CLIENT_ID",
+              "PUNTO25_API_BASE_URL",
+          }
+          missing = [name for name in sorted(allowed) if not os.environ.get(name)]
+          if missing:
+              print("Required Alpha client configuration is missing: " + ", ".join(missing), file=sys.stderr)
+              raise SystemExit(1)
+          if not os.environ["PUNTO25_API_BASE_URL"].startswith("https://"):
+              print("PUNTO25_API_BASE_URL must use HTTPS.", file=sys.stderr)
+              raise SystemExit(1)
+          print("Allowlisted Alpha client configuration validated without exposing values.")
+          PY
+
+          gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Prepare exact intermediate APK
+        id: intermediate
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_APK="app/build/outputs/apk/debug/app-debug.apk"
+          INTERMEDIATE_DIR="$RUNNER_TEMP/physical-intermediate"
+          INTERMEDIATE_APK="$INTERMEDIATE_DIR/intermediate.apk"
+
+          [[ -f "$SOURCE_APK" ]] || {
+            echo "Expected debug APK was not produced." >&2
+            exit 1
+          }
+
+          rm -rf "$INTERMEDIATE_DIR"
+          mkdir -p "$INTERMEDIATE_DIR"
+          cp "$SOURCE_APK" "$INTERMEDIATE_APK"
+
+          INTERMEDIATE_SHA256="$(sha256sum "$INTERMEDIATE_APK" | awk '{print $1}')"
+          [[ "$INTERMEDIATE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Unable to hash intermediate APK." >&2
+            exit 1
+          }
+
+          echo "intermediate_sha256=$INTERMEDIATE_SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload isolated intermediate APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: physical-apk-intermediate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/physical-intermediate/intermediate.apk
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  sign-apk:
+    name: Isolated stable Alpha signing
+    needs: [validate, build-intermediate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    outputs:
+      artifact_url: ${{ steps.final_artifact.outputs.artifact-url }}
+      artifact_id: ${{ steps.final_artifact.outputs.artifact-id }}
+    steps:
+      - name: Java 17 for keytool
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android signing tools
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'build-tools;36.0.0'
+
+      - name: Download only intermediate APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: physical-apk-intermediate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/physical-download
+
+      - name: Verify isolated intermediate artifact
+        shell: bash
+        env:
+          EXPECTED_INTERMEDIATE_SHA256: ${{ needs.build-intermediate.outputs.intermediate_sha256 }}
+        run: |
+          set -euo pipefail
+          DOWNLOAD_DIR="$RUNNER_TEMP/physical-download"
+          INTERMEDIATE_APK="$DOWNLOAD_DIR/intermediate.apk"
+
+          [[ -f "$INTERMEDIATE_APK" && ! -L "$INTERMEDIATE_APK" ]] || {
+            echo "Expected intermediate APK is missing or is a symlink." >&2
+            exit 1
+          }
+          [[ "$(find "$DOWNLOAD_DIR" -maxdepth 1 -type f | wc -l | tr -d ' ')" == "1" ]] || {
+            echo "Intermediate artifact contains unexpected files." >&2
+            exit 1
+          }
+
+          ACTUAL_INTERMEDIATE_SHA256="$(sha256sum "$INTERMEDIATE_APK" | awk '{print $1}')"
+          [[ "$ACTUAL_INTERMEDIATE_SHA256" == "$EXPECTED_INTERMEDIATE_SHA256" ]] || {
+            echo "Intermediate APK hash mismatch." >&2
+            exit 1
+          }
+
+      - name: Re-align, re-sign and verify with stable Alpha identity
+        id: signed
+        shell: bash
+        env:
+          ALPHA_KEYSTORE_B64: ${{ secrets.ALPHA_KEYSTORE_B64 }}
+          ALPHA_KEYSTORE_PASSWORD: ${{ secrets.ALPHA_KEYSTORE_PASSWORD }}
+          ALPHA_KEY_ALIAS: ${{ secrets.ALPHA_KEY_ALIAS }}
+          ALPHA_KEY_PASSWORD: ${{ secrets.ALPHA_KEY_PASSWORD }}
+          WORKFLOW_SOURCE_SHA: ${{ needs.validate.outputs.workflow_source_sha }}
+          TRUSTED_MAIN_SHA: ${{ needs.validate.outputs.trusted_main_sha }}
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+          PR_BASE_SHA: ${{ needs.validate.outputs.pr_base_sha }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          CHECKED_OUT_SHA: ${{ needs.build-intermediate.outputs.checked_out_sha }}
+          VERSION_NAME: ${{ needs.build-intermediate.outputs.version_name }}
+          VERSION_CODE: ${{ needs.build-intermediate.outputs.version_code }}
+          APPLICATION_ID: ${{ needs.build-intermediate.outputs.application_id }}
+          APK_NAME: ${{ needs.build-intermediate.outputs.apk_name }}
+          INTERMEDIATE_SHA256: ${{ needs.build-intermediate.outputs.intermediate_sha256 }}
+        run: |
+          set -euo pipefail
+
+          for name in ALPHA_KEYSTORE_B64 ALPHA_KEYSTORE_PASSWORD ALPHA_KEY_ALIAS ALPHA_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Stable Alpha signing configuration is incomplete: $name" >&2
+              exit 1
+            fi
+          done
+
+          DOWNLOAD_DIR="$RUNNER_TEMP/physical-download"
+          INTERMEDIATE_APK="$DOWNLOAD_DIR/intermediate.apk"
+          SIGNING_DIR="$RUNNER_TEMP/physical-signing"
+          BUNDLE_DIR="$RUNNER_TEMP/physical-final-bundle"
+          KEYSTORE_PATH="$SIGNING_DIR/punto25-alpha.jks"
+          ALIGNED_APK="$SIGNING_DIR/aligned.apk"
+          FINAL_APK="$BUNDLE_DIR/$APK_NAME"
+          APKSIGNER="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/build-tools/36.0.0/apksigner"
+          ZIPALIGN="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}/build-tools/36.0.0/zipalign"
+          trap 'rm -f "$KEYSTORE_PATH" "$ALIGNED_APK"' EXIT
+
+          rm -rf "$SIGNING_DIR" "$BUNDLE_DIR"
+          mkdir -p "$SIGNING_DIR" "$BUNDLE_DIR"
+
+          [[ -x "$APKSIGNER" && -x "$ZIPALIGN" ]] || {
+            echo "Required official Android signing tools are unavailable." >&2
+            exit 1
+          }
+
+          printf '%s' "$ALPHA_KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
+          chmod 600 "$KEYSTORE_PATH"
+          [[ -s "$KEYSTORE_PATH" ]] || {
+            echo "Decoded Alpha keystore is empty." >&2
+            exit 1
+          }
+
+          EXPECTED_ALPHA_CERT_SHA256="$(
+            keytool -exportcert \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass "$ALPHA_KEYSTORE_PASSWORD" \
+              -alias "$ALPHA_KEY_ALIAS" 2>/dev/null |
+              sha256sum |
+              awk '{print tolower($1)}'
+          )"
+          [[ "$EXPECTED_ALPHA_CERT_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Unable to determine configured Alpha certificate identity." >&2
+            exit 1
+          }
+
+          # Android requires zipalign before apksigner. apksigner strips pre-existing
+          # signatures by default, so the debug-signed intermediate is re-signed rather
+          # than appended with an additional signer.
+          "$ZIPALIGN" -f -v 4 "$INTERMEDIATE_APK" "$ALIGNED_APK" >/dev/null
+
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE_PATH" \
+            --ks-pass env:ALPHA_KEYSTORE_PASSWORD \
+            --ks-key-alias "$ALPHA_KEY_ALIAS" \
+            --key-pass env:ALPHA_KEY_PASSWORD \
+            --out "$FINAL_APK" \
+            "$ALIGNED_APK"
+
+          "$ZIPALIGN" -c -v 4 "$FINAL_APK" >/dev/null
+
+          if ! SIGNER_OUTPUT="$("$APKSIGNER" verify --verbose --print-certs "$FINAL_APK" 2>&1)"; then
+            echo "Final APK signature verification failed." >&2
+            exit 1
+          fi
+
+          SIGNER_COUNT="$(
+            printf '%s\n' "$SIGNER_OUTPUT" |
+              awk '/^Signer #[0-9]+ certificate SHA-256 digest:[[:space:]]*/ { count++ } END { print count + 0 }'
+          )"
+          [[ "$SIGNER_COUNT" == "1" ]] || {
+            echo "Expected exactly one final APK signer." >&2
+            exit 1
+          }
+
+          APK_SIGNER_CERT_SHA256="$(
+            printf '%s\n' "$SIGNER_OUTPUT" |
+              awk -F':[[:space:]]*' '/^Signer #1 certificate SHA-256 digest:[[:space:]]*/ { print $2 }' |
+              tr '[:upper:]' '[:lower:]' |
+              tr -d '[:space:]:'
+          )"
+          [[ "$APK_SIGNER_CERT_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Unable to determine final APK signer certificate." >&2
+            exit 1
+          }
+
+          certificate_matches() {
+            local expected="$1"
+            local actual="$2"
+            [[ "$expected" =~ ^[0-9a-f]{64}$ ]] &&
+              [[ "$actual" =~ ^[0-9a-f]{64}$ ]] &&
+              [[ "$expected" == "$actual" ]]
+          }
+
+          certificate_matches "$EXPECTED_ALPHA_CERT_SHA256" "$APK_SIGNER_CERT_SHA256" || {
+            echo "Final APK signer does not match configured Alpha certificate." >&2
+            exit 1
+          }
+
+          if [[ "${EXPECTED_ALPHA_CERT_SHA256:0:1}" == "0" ]]; then
+            DIFFERENT_CERT_SHA256="1${EXPECTED_ALPHA_CERT_SHA256:1}"
+          else
+            DIFFERENT_CERT_SHA256="0${EXPECTED_ALPHA_CERT_SHA256:1}"
+          fi
+          if certificate_matches "$EXPECTED_ALPHA_CERT_SHA256" "$DIFFERENT_CERT_SHA256"; then
+            echo "Certificate mismatch negative regression failed." >&2
+            exit 1
+          fi
+
+          APK_SHA256="$(sha256sum "$FINAL_APK" | awk '{print $1}')"
+          [[ "$APK_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Unable to hash final APK." >&2
+            exit 1
+          }
+
+          printf '%s  %s\n' "$APK_SHA256" "$APK_NAME" > "$BUNDLE_DIR/SHA256SUMS.txt"
+
+          cat > "$BUNDLE_DIR/BUILD_PROVENANCE.txt" <<PROVENANCE
+          repository=$GITHUB_REPOSITORY
+          workflow_source_sha=$WORKFLOW_SOURCE_SHA
+          trusted_main_sha=$TRUSTED_MAIN_SHA
+          pr_number=$PR_NUMBER
+          pr_base_sha=$PR_BASE_SHA
+          requested_target_sha=$TARGET_SHA
+          checked_out_target_sha=$CHECKED_OUT_SHA
+          workflow_run_id=$GITHUB_RUN_ID
+          workflow_run_attempt=$GITHUB_RUN_ATTEMPT
+          versionName=$VERSION_NAME
+          versionCode=$VERSION_CODE
+          applicationId=$APPLICATION_ID
+          alpha_signer_cert_sha256=$APK_SIGNER_CERT_SHA256
+          intermediate_apk_sha256=$INTERMEDIATE_SHA256
+          apk_filename=$APK_NAME
+          apk_sha256=$APK_SHA256
+          PROVENANCE
+
+          [[ "$CHECKED_OUT_SHA" == "$TARGET_SHA" ]]
+          [[ "$APPLICATION_ID" == "ar.com.mandados.app" ]]
+          [[ "$(grep '^requested_target_sha=' "$BUNDLE_DIR/BUILD_PROVENANCE.txt" | cut -d= -f2-)" == "$TARGET_SHA" ]]
+          [[ "$(grep '^checked_out_target_sha=' "$BUNDLE_DIR/BUILD_PROVENANCE.txt" | cut -d= -f2-)" == "$TARGET_SHA" ]]
+          [[ "$(grep '^apk_sha256=' "$BUNDLE_DIR/BUILD_PROVENANCE.txt" | cut -d= -f2-)" == "$APK_SHA256" ]]
+          [[ "$(grep '^alpha_signer_cert_sha256=' "$BUNDLE_DIR/BUILD_PROVENANCE.txt" | cut -d= -f2-)" == "$EXPECTED_ALPHA_CERT_SHA256" ]]
+
+          mapfile -t BUNDLE_FILES < <(find "$BUNDLE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort)
+          EXPECTED_FILES=("BUILD_PROVENANCE.txt" "$APK_NAME" "SHA256SUMS.txt")
+          [[ "${#BUNDLE_FILES[@]}" == "3" ]] || {
+            echo "Final artifact bundle has unexpected file count." >&2
+            exit 1
+          }
+          for i in 0 1 2; do
+            [[ "${BUNDLE_FILES[$i]}" == "${EXPECTED_FILES[$i]}" ]] || {
+              echo "Final artifact bundle contents are inconsistent." >&2
+              exit 1
+            }
+          done
+
+          rm -f "$KEYSTORE_PATH" "$ALIGNED_APK"
+          echo "Final APK signature/hash/provenance verification passed."
+
+      - name: Upload physical APK evidence bundle
+        id: final_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ needs.build-intermediate.outputs.artifact_name }}
+          path: |
+            ${{ runner.temp }}/physical-final-bundle/${{ needs.build-intermediate.outputs.apk_name }}
+            ${{ runner.temp }}/physical-final-bundle/SHA256SUMS.txt
+            ${{ runner.temp }}/physical-final-bundle/BUILD_PROVENANCE.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Surface exact artifact URL
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.final_artifact.outputs.artifact-url }}
+          ARTIFACT_ID: ${{ steps.final_artifact.outputs.artifact-id }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          APK_NAME: ${{ needs.build-intermediate.outputs.apk_name }}
+        run: |
+          set -euo pipefail
+          [[ -n "$ARTIFACT_URL" && -n "$ARTIFACT_ID" ]] || {
+            echo "Final artifact URL/ID is unavailable." >&2
+            exit 1
+          }
+          {
+            echo "### Punto25 pre-merge physical APK"
+            echo "- target_sha: \`$TARGET_SHA\`"
+            echo "- APK: \`$APK_NAME\`"
+            echo "- artifact: $ARTIFACT_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
