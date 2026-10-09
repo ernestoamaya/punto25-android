@@ -60,7 +60,8 @@ class LocalStore(context: Context) {
                             description = z.optString("description", ""),
                             category = z.optString("category", "OTRAS"),
                             price = z.optInt("price", 0),
-                            enabled = z.optBoolean("enabled", true)
+                            enabled = z.optBoolean("enabled", true),
+                            polygons = z.optZonePolygons()
                         )
                     )
                 }
@@ -182,6 +183,7 @@ class LocalStore(context: Context) {
                     put("category", z.category)
                     put("price", z.price)
                     put("enabled", z.enabled)
+                    put("polygons", zonePolygonsJson(z.polygons))
                 })
             }
         }.toString())
@@ -671,6 +673,38 @@ class LocalStore(context: Context) {
                 }.getOrNull() ?: return@forEach
                 put(point, parsed)
             }
+        }
+    }
+
+    private fun JSONObject.optZonePolygons(): List<List<GeoPoint>> {
+        val polygons = optJSONArray("polygons") ?: return emptyList()
+        val parsed = runCatching {
+            buildList {
+                for (polygonIndex in 0 until polygons.length()) {
+                    val polygon = polygons.getJSONArray(polygonIndex)
+                    add(buildList {
+                        for (vertexIndex in 0 until polygon.length()) {
+                            val vertex = polygon.getJSONObject(vertexIndex)
+                            require(vertex.has("latitude") && vertex.has("longitude"))
+                            add(GeoPoint(vertex.getDouble("latitude"), vertex.getDouble("longitude")))
+                        }
+                    })
+                }
+            }
+        }.getOrNull() ?: return emptyList()
+        return parsed.takeIf { validateZoneGeometry(it).valid } ?: emptyList()
+    }
+
+    private fun zonePolygonsJson(polygons: List<List<GeoPoint>>): JSONArray = JSONArray().apply {
+        polygons.forEach { polygon ->
+            put(JSONArray().apply {
+                polygon.forEach { point ->
+                    put(JSONObject().apply {
+                        put("latitude", point.latitude)
+                        put("longitude", point.longitude)
+                    })
+                }
+            })
         }
     }
 
