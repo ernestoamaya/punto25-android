@@ -335,6 +335,7 @@ private fun MandadosNavigation(controller: MandadosController) {
         )
         Screen.ADMIN -> AdminScreen(
             controller,
+            adminAuthorized = adminSession.authorized && AdminGoogleAuthIntegration.hasCurrentUser(context),
             onBack = {
                 adminSession.clear()
                 AdminGoogleAuthIntegration.signOut(context)
@@ -1721,6 +1722,7 @@ private fun AdminLoginScreen(onBack: () -> Unit, onSuccess: () -> Unit) {
 @Composable
 private fun AdminScreen(
     c: MandadosController,
+    adminAuthorized: Boolean,
     onBack: () -> Unit,
     onOrders: () -> Unit,
     onRiders: () -> Unit,
@@ -1734,6 +1736,7 @@ private fun AdminScreen(
     val receptionEnabledGreen = if (darkReceptionPalette) ReceptionEnabledGreenDark else ReceptionEnabledGreenLight
     val receptionPausedRed = if (darkReceptionPalette) ReceptionPausedRedDark else ReceptionPausedRedLight
     var editingZoneId by rememberSaveable { mutableStateOf<String?>(null) }
+    var geometryZoneId by rememberSaveable { mutableStateOf<String?>(null) }
     var newZoneOpen by rememberSaveable { mutableStateOf(false) }
 
     Page("Panel de Administración", onBack) {
@@ -1869,6 +1872,9 @@ private fun AdminScreen(
                     OutlinedButton(onClick = { editingZoneId = z.id }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
                         Text("EDITAR ZONA")
                     }
+                    OutlinedButton(onClick = { geometryZoneId = z.id }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                        Text("EDITAR GEOMETRÍA")
+                    }
                 }
             }
         }
@@ -1896,6 +1902,18 @@ private fun AdminScreen(
                 }
             )
         }
+    }
+    geometryZoneId?.let { id ->
+        ZoneGeometryEditorDialog(
+            c = c,
+            zoneId = id,
+            adminAuthorized = adminAuthorized,
+            onDismiss = { geometryZoneId = null },
+            onAuthLost = {
+                geometryZoneId = null
+                onBack()
+            }
+        )
     }
 }
 
