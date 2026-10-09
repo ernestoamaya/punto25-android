@@ -1049,6 +1049,7 @@ private fun DeliveryForm(
     val exitGuard = rememberUnsavedChangesGuardState()
     val originOk = d.originAddress.isNotBlank() || d.originLocation != null
     val destinationOk = d.destinationAddress.isNotBlank() || d.destinationLocation != null
+    val autoZones = c.config.zoneAutoResolutionEnabled
 
     val title = when (d.category) {
         ServiceCategory.ERRAND -> "Encargo"
@@ -1068,7 +1069,11 @@ private fun DeliveryForm(
         Text("Retiro", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Field("Dirección (opcional si marcás el pin)", d.originAddress) { c.draft = c.draft.copy(originAddress = it) }
         Field("Referencia (opcional)", d.originReference) { c.draft = c.draft.copy(originReference = it) }
-        ZoneField(c, d.originZoneId, "Zona de retiro") { c.draft = c.draft.copy(originZoneId = it) }
+        if (autoZones) {
+            AutomaticZoneField(c, d.originLocation, "Zona de retiro")
+        } else {
+            ZoneField(c, d.originZoneId, "Zona de retiro") { c.draft = c.draft.copy(originZoneId = it) }
+        }
         LocationField("Ubicación de retiro", d.originLocation, onOpen = { onMap(MapTarget.DELIVERY_ORIGIN) }) {
             c.draft = c.draft.copy(originLocation = null)
         }
@@ -1077,7 +1082,11 @@ private fun DeliveryForm(
         Text("Entrega", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Field("Dirección (opcional si marcás el pin)", d.destinationAddress) { c.draft = c.draft.copy(destinationAddress = it) }
         Field("Referencia (opcional)", d.destinationReference) { c.draft = c.draft.copy(destinationReference = it) }
-        ZoneField(c, d.destinationZoneId, "Zona de entrega") { c.draft = c.draft.copy(destinationZoneId = it) }
+        if (autoZones) {
+            AutomaticZoneField(c, d.destinationLocation, "Zona de entrega")
+        } else {
+            ZoneField(c, d.destinationZoneId, "Zona de entrega") { c.draft = c.draft.copy(destinationZoneId = it) }
+        }
         LocationField("Ubicación de entrega", d.destinationLocation, onOpen = { onMap(MapTarget.DELIVERY_DESTINATION) }) {
             c.draft = c.draft.copy(destinationLocation = null)
         }
@@ -1091,11 +1100,16 @@ private fun DeliveryForm(
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = onContinue,
-            enabled = originOk && destinationOk && d.originZoneId.isNotBlank() && d.destinationZoneId.isNotBlank(),
+            enabled = originOk && destinationOk && (autoZones || (d.originZoneId.isNotBlank() && d.destinationZoneId.isNotBlank())),
             modifier = Modifier.fillMaxWidth()
         ) { Text("REVISAR SOLICITUD") }
         Spacer(Modifier.height(12.dp))
-        AssistBox("Cada parada puede identificarse por dirección escrita, por un pin confirmado en el mapa o por ambas. La zona tarifaria sigue siendo una selección independiente.")
+        AssistBox(
+            if (autoZones)
+                "Cada parada puede identificarse por dirección escrita, por un pin confirmado en el mapa o por ambas. El pin determina automáticamente la zona; si falta o no puede resolverse, la tarifa queda a confirmar."
+            else
+                "Cada parada puede identificarse por dirección escrita, por un pin confirmado en el mapa o por ambas. La zona tarifaria sigue siendo una selección independiente."
+        )
     }
 }
 
@@ -1111,6 +1125,7 @@ private fun ShoppingForm(
     val dirty = d != baseline
     val exitGuard = rememberUnsavedChangesGuardState()
     val needsPre = d.requiresPrePickup()
+    val autoZones = c.config.zoneAutoResolutionEnabled
 
     fun setInstruction(value: PurchaseInstructionType) {
         var next = c.draft.copy(instructionType = value)
@@ -1190,8 +1205,12 @@ private fun ShoppingForm(
         Text("Comercio de retiro", fontWeight = FontWeight.Bold)
         Field("Nombre del comercio", d.storeName) { c.draft = c.draft.copy(storeName = it) }
         Field("Dirección del comercio", d.storeAddress) { c.draft = c.draft.copy(storeAddress = it) }
-        ZoneField(c, d.storeZoneId, "Zona del comercio (opcional)", allowBlank = true) {
-            c.draft = c.draft.copy(storeZoneId = it)
+        if (autoZones) {
+            AutomaticZoneField(c, d.storeLocation, "Zona del comercio")
+        } else {
+            ZoneField(c, d.storeZoneId, "Zona del comercio (opcional)", allowBlank = true) {
+                c.draft = c.draft.copy(storeZoneId = it)
+            }
         }
         LocationField("Ubicación del comercio", d.storeLocation, onOpen = { onMap(MapTarget.SHOPPING_STORE) }) {
             c.draft = c.draft.copy(storeLocation = null)
@@ -1229,12 +1248,16 @@ private fun ShoppingForm(
                     current.copy(prePickupReference = value)
                 }
             }
-            ZoneField(c, d.prePickupZoneId, "Zona del retiro previo") { value ->
-                val current = c.draft
-                c.draft = if (current.sameDeliveryAsPrePickup) {
-                    current.copy(prePickupZoneId = value, destinationZoneId = value)
-                } else {
-                    current.copy(prePickupZoneId = value)
+            if (autoZones) {
+                AutomaticZoneField(c, d.prePickupLocation, "Zona del retiro previo")
+            } else {
+                ZoneField(c, d.prePickupZoneId, "Zona del retiro previo") { value ->
+                    val current = c.draft
+                    c.draft = if (current.sameDeliveryAsPrePickup) {
+                        current.copy(prePickupZoneId = value, destinationZoneId = value)
+                    } else {
+                        current.copy(prePickupZoneId = value)
+                    }
                 }
             }
             LocationField(
@@ -1277,12 +1300,16 @@ private fun ShoppingForm(
             d.destinationReference,
             enabled = !d.sameDeliveryAsPrePickup
         ) { c.draft = c.draft.copy(destinationReference = it) }
-        ZoneField(
-            c,
-            d.destinationZoneId,
-            "Zona de entrega",
-            enabled = !d.sameDeliveryAsPrePickup
-        ) { c.draft = c.draft.copy(destinationZoneId = it) }
+        if (autoZones) {
+            AutomaticZoneField(c, d.destinationLocation, "Zona de entrega")
+        } else {
+            ZoneField(
+                c,
+                d.destinationZoneId,
+                "Zona de entrega",
+                enabled = !d.sameDeliveryAsPrePickup
+            ) { c.draft = c.draft.copy(destinationZoneId = it) }
+        }
         LocationField(
             "Ubicación de entrega",
             d.destinationLocation,
@@ -1299,8 +1326,10 @@ private fun ShoppingForm(
         }
 
         val descOk = d.instructionType != PurchaseInstructionType.IN_APP || d.purchaseDescription.isNotBlank()
-        val preOk = !needsPre || ((d.prePickupAddress.isNotBlank() || d.prePickupLocation != null) && d.prePickupZoneId.isNotBlank())
-        val destinationOk = (d.destinationAddress.isNotBlank() || d.destinationLocation != null) && d.destinationZoneId.isNotBlank()
+        val preLocationOk = d.prePickupAddress.isNotBlank() || d.prePickupLocation != null
+        val destinationLocationOk = d.destinationAddress.isNotBlank() || d.destinationLocation != null
+        val preOk = !needsPre || (preLocationOk && (autoZones || d.prePickupZoneId.isNotBlank()))
+        val destinationOk = destinationLocationOk && (autoZones || d.destinationZoneId.isNotBlank())
         val amountOk = d.purchaseMaxAmount <= c.config.maxPurchaseAmount
 
         Spacer(Modifier.height(16.dp))
@@ -1317,7 +1346,7 @@ private fun ShoppingForm(
 @Composable
 private fun ReviewScreen(c: MandadosController, onBack: () -> Unit, onSubmit: () -> String?) {
     val context = LocalContext.current
-    val p = c.pricing()
+    val p = c.pricingForNewOrder()
     val pendingLegal = c.requiredLegalDocumentsForCustomer()
     var legalAccepted by rememberSaveable(pendingLegal.joinToString("|") { it.id }) { mutableStateOf(pendingLegal.isEmpty()) }
     var submitError by rememberSaveable { mutableStateOf("") }
@@ -1738,6 +1767,7 @@ private fun AdminScreen(
     var editingZoneId by rememberSaveable { mutableStateOf<String?>(null) }
     var geometryZoneId by rememberSaveable { mutableStateOf<String?>(null) }
     var newZoneOpen by rememberSaveable { mutableStateOf(false) }
+    var zoneAutoError by rememberSaveable { mutableStateOf(false) }
 
     Page("Panel de Administración", onBack) {
         Text("Modo operativo", fontWeight = FontWeight.Bold)
@@ -1847,6 +1877,28 @@ private fun AdminScreen(
             IntConfigField(if (cfg.prePickupMode == PrePickupMode.FIXED) "Monto fijo" else "Porcentaje", cfg.prePickupValue) {
                 c.updateConfig(c.config.copy(prePickupValue = it))
             }
+        }
+
+        Spacer(Modifier.height(18.dp))
+        Text("Resolución automática de zonas", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(if (cfg.zoneAutoResolutionEnabled) "ACTIVA" else "INACTIVA", modifier = Modifier.weight(1f))
+            Switch(
+                checked = cfg.zoneAutoResolutionEnabled,
+                onCheckedChange = { enabled ->
+                    zoneAutoError = !c.setZoneAutoResolutionEnabled(enabled)
+                }
+            )
+        }
+        AssistBox(
+            if (cfg.zoneAutoResolutionEnabled)
+                "Los pines de los pedidos nuevos determinan automáticamente la zona. Las direcciones escritas siguen siendo descriptivas y no se reprician pedidos existentes."
+            else
+                "Desactivada: los pedidos nuevos conservan la selección manual de zona."
+        )
+        if (zoneAutoError) {
+            Spacer(Modifier.height(6.dp))
+            AssistBox("No se puede activar la resolución automática porque existe una geometría activa inválida o en conflicto. Revisá las zonas activas.")
         }
 
         Spacer(Modifier.height(18.dp))
@@ -2061,6 +2113,17 @@ private fun DeliveryPaymentSelector(c: MandadosController, current: DeliveryPaym
 private fun EnumRadio(text: String, selected: Boolean, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
         RadioButton(selected, onClick); Text(text)
+    }
+}
+
+@Composable
+private fun AutomaticZoneField(c: MandadosController, point: GeoPoint?, label: String) {
+    val result = resolveZoneForPoint(point, c.config.zones)
+    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text(label, fontWeight = FontWeight.SemiBold)
+            Text(autoResolutionPresentation(result, c.config, point != null), style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
