@@ -19,7 +19,9 @@ internal fun MandadosController.updateZoneGeometry(
     }
     if (candidate.polygons == current.polygons) return ZoneGeometryMutationResult.SUCCESS
 
-    updateConfig(config.copy(zones = candidateZones))
+    if (!updateConfig(config.copy(zones = candidateZones))) {
+        return ZoneGeometryMutationResult(false, "La configuración activa no es segura para resolución automática.")
+    }
     return ZoneGeometryMutationResult.SUCCESS
 }
 
