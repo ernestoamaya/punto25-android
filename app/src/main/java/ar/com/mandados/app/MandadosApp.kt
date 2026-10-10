@@ -31,7 +31,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
@@ -120,10 +119,14 @@ fun MandadosApp() {
 @Composable
 private fun MandadosNavigation(controller: MandadosController) {
     val context = LocalContext.current
+    val riderCoordinator = remember(context.applicationContext) { createRiderCoordinator(context.applicationContext) }
+    val riderScope = rememberCoroutineScope()
     var screen by rememberSaveable { mutableStateOf(if (controller.customer == null) Screen.REGISTER else Screen.HOME) }
     var selectedOrderId by rememberSaveable { mutableStateOf<String?>(null) }
     var lastOrderId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedRiderId by rememberSaveable { mutableStateOf<String?>(null) }
+    var riderRestoreChecked by remember { mutableStateOf(false) }
+    var riderAccessMessage by remember { mutableStateOf("") }
     var mapTarget by rememberSaveable { mutableStateOf<MapTarget?>(null) }
     var lastRootBackAt by rememberSaveable { mutableStateOf(0L) }
     var orderDraftBaseline by rememberSaveable(saver = orderDraftBaselineStateSaver) {
@@ -145,6 +148,48 @@ private fun MandadosNavigation(controller: MandadosController) {
     }
     val requiresAdminReauthorization = screen in protectedAdminScreens &&
         (!adminSession.authorized || !AdminGoogleAuthIntegration.hasCurrentUser(context))
+
+    fun logoutRider(target: Screen) {
+        val session = controller.currentRiderSession()
+        controller.clearAuthenticatedRiderSession()
+        selectedRiderId = null
+        riderAccessMessage = ""
+        screen = target
+        riderScope.launch { riderCoordinator.logout(session) }
+    }
+
+    LaunchedEffect(Unit) {
+        val existing = RiderSessionAuthority.current()
+        if (existing != null && controller.applyAuthenticatedRiderSession(existing)) {
+            selectedRiderId = existing.riderCode
+            riderRestoreChecked = true
+            return@LaunchedEffect
+        }
+        controller.clearAuthenticatedRiderSession()
+        when (val restored = riderCoordinator.restore()) {
+            is RiderAuthOutcome.Authorized -> {
+                if (controller.applyAuthenticatedRiderSession(restored.session)) {
+                    selectedRiderId = restored.session.riderCode
+                    if (screen == Screen.RIDER_ACCESS || screen == Screen.RIDER_WORKSPACE) {
+                        screen = Screen.RIDER_WORKSPACE
+                    }
+                } else {
+                    controller.clearAuthenticatedRiderSession()
+                    riderAccessMessage = "No pudimos validar tu acceso. Volvé a iniciar sesión."
+                    if (screen == Screen.RIDER_WORKSPACE) screen = Screen.RIDER_ACCESS
+                }
+            }
+            is RiderAuthOutcome.Rejected -> {
+                controller.clearAuthenticatedRiderSession()
+                if (screen == Screen.RIDER_WORKSPACE) {
+                    selectedRiderId = null
+                    riderAccessMessage = restored.recoverableMessage
+                    screen = Screen.RIDER_ACCESS
+                }
+            }
+        }
+        riderRestoreChecked = true
+    }
 
     LaunchedEffect(screen) {
         if (
@@ -205,8 +250,7 @@ private fun MandadosNavigation(controller: MandadosController) {
                 Screen.RIDERS
             }
             Screen.RIDER_WORKSPACE -> {
-                controller.logoutRider()
-                selectedRiderId = null
+                logoutRider(Screen.REGISTER)
                 Screen.REGISTER
             }
             Screen.LOCATION_PICKER -> parentForMap(mapTarget)
@@ -246,7 +290,15 @@ private fun MandadosNavigation(controller: MandadosController) {
                 else Toast.makeText(context, "No se pudo confirmar la identidad Google. Volvé a intentar.", Toast.LENGTH_LONG).show()
             },
             onBack = ::handleRootBack,
-            onRider = { screen = Screen.RIDER_ACCESS },
+            onRider = {
+                val active = controller.currentRiderSession()
+                if (active != null && controller.applyAuthenticatedRiderSession(active)) {
+                    selectedRiderId = active.riderCode
+                    screen = Screen.RIDER_WORKSPACE
+                } else {
+                    screen = Screen.RIDER_ACCESS
+                }
+            },
             onAdmin = {
                 adminSession.clear()
                 screen = Screen.ADMIN_LOGIN
@@ -259,10 +311,13 @@ private fun MandadosNavigation(controller: MandadosController) {
             },
             onBack = { screen = Screen.REGISTER }
         )
-        Screen.RIDER_ACCESS -> RiderAccessScreen(
+        Screen.RIDER_ACCESS -> RiderBackendAccessScreen(
             controller,
+            coordinator = riderCoordinator,
+            initialMessage = riderAccessMessage,
             onBack = { screen = Screen.REGISTER },
             onSuccess = { riderId ->
+                riderAccessMessage = ""
                 selectedRiderId = riderId
                 screen = Screen.RIDER_WORKSPACE
             }
@@ -366,7 +421,6 @@ private fun MandadosNavigation(controller: MandadosController) {
             controller,
             onBack = { screen = Screen.ADMIN },
             onWorkspace = { riderId ->
-                controller.logoutRider()
                 selectedRiderId = riderId
                 screen = Screen.RIDER_ADMIN_VIEW
             }
@@ -381,30 +435,29 @@ private fun MandadosNavigation(controller: MandadosController) {
         )
         Screen.RIDER_WORKSPACE -> {
             val riderId = selectedRiderId
-            if (!riderWorkspaceSessionValid(controller, riderId)) {
+            if (!riderRestoreChecked && controller.currentRiderSession() == null) {
+                Page("Acceso de Repartidor") {
+                    CircularProgressIndicator()
+                    Text("Validando sesión…", modifier = Modifier.padding(top = 12.dp))
+                }
+            } else if (!riderWorkspaceSessionValid(controller, riderId)) {
                 LaunchedEffect(riderId) {
+                    controller.clearAuthenticatedRiderSession()
                     selectedRiderId = null
+                    riderAccessMessage = "No pudimos validar tu acceso. Volvé a iniciar sesión."
                     screen = Screen.RIDER_ACCESS
                 }
             } else if (riderId != null && controller.riderOperationalEligibility(riderId).allowed) {
                 RiderDashboardScreen(
                     controller,
                     riderId,
-                    onBack = {
-                        controller.logoutRider()
-                        selectedRiderId = null
-                        screen = Screen.REGISTER
-                    }
+                    onBack = { logoutRider(Screen.REGISTER) }
                 )
             } else if (riderId != null) {
                 RiderRestrictedWorkspaceScreen(
                     controller,
                     riderId,
-                    onBack = {
-                        controller.logoutRider()
-                        selectedRiderId = null
-                        screen = Screen.RIDER_ACCESS
-                    }
+                    onBack = { logoutRider(Screen.RIDER_ACCESS) }
                 )
             }
         }
@@ -771,126 +824,6 @@ private fun WhatsAppVerificationScreen(c: MandadosController, onVerified: () -> 
 }
 
 @Composable
-private fun RiderAccessScreen(c: MandadosController, onBack: () -> Unit, onSuccess: (String) -> Unit) {
-    var redeemMode by rememberSaveable { mutableStateOf(true) }
-    var code by rememberSaveable { mutableStateOf("") }
-    var riderId by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var confirm by rememberSaveable { mutableStateOf("") }
-    var error by rememberSaveable { mutableStateOf("") }
-    var deactivatedRiderName by rememberSaveable { mutableStateOf<String?>(null) }
-
-    Page("Acceso de Repartidor", onBack) {
-        AssistBox("El alta de Repartidores es únicamente por invitación de Administración. Nadie, incluido el Admin, puede ver tu contraseña.")
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(redeemMode, { redeemMode = true; error = "" }, { Text("TENGO CÓDIGO") }, modifier = Modifier.weight(1f))
-            FilterChip(!redeemMode, { redeemMode = false; error = "" }, { Text("YA TENGO ACCESO") }, modifier = Modifier.weight(1f))
-        }
-
-        if (redeemMode) {
-            OutlinedTextField(
-                code,
-                { code = it.uppercase().take(16); error = "" },
-                label = { Text("Código de invitación") },
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                singleLine = true
-            )
-            OutlinedTextField(
-                password,
-                { password = it; error = "" },
-                label = { Text("Crear contraseña") },
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                singleLine = true
-            )
-            OutlinedTextField(
-                confirm,
-                { confirm = it; error = "" },
-                label = { Text("Repetir contraseña") },
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                singleLine = true
-            )
-            Text("Mínimo 8 caracteres, con mayúscula, minúscula y número.", style = MaterialTheme.typography.bodySmall)
-            Button(
-                onClick = {
-                    error = when {
-                        password != confirm -> "Las contraseñas no coinciden."
-                        !c.passwordIsStrong(password) -> "La contraseña no cumple los requisitos."
-                        else -> {
-                            val id = c.redeemRiderInvitation(code, password)
-                            if (id != null) {
-                                onSuccess(id)
-                                ""
-                            } else "Código inválido, vencido o ya utilizado."
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
-            ) { Text("ACTIVAR ACCESO") }
-        } else {
-            OutlinedTextField(
-                riderId,
-                { riderId = it.uppercase().take(20); error = "" },
-                label = { Text("ID de Repartidor") },
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                singleLine = true
-            )
-            OutlinedTextField(
-                password,
-                { password = it; error = "" },
-                label = { Text("Contraseña") },
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                singleLine = true
-            )
-            Button(
-                onClick = {
-                    val id = riderId.trim()
-                    when (val result = c.authenticateRiderResult(id, password)) {
-                        is RiderAuthenticationResult -> when (result.status) {
-                            RiderAuthenticationStatus.AUTHENTICATED -> {
-                                error = ""
-                                onSuccess(result.riderId ?: id)
-                            }
-                            RiderAuthenticationStatus.DEACTIVATED -> {
-                                error = ""
-                                deactivatedRiderName = result.riderName.orEmpty()
-                            }
-                            RiderAuthenticationStatus.INVALID_CREDENTIALS -> {
-                                error = "ID o contraseña incorrectos."
-                            }
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
-            ) { Text("INGRESAR") }
-        }
-        if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
-    }
-
-    deactivatedRiderName?.let { name ->
-        Punto25AlertDialog(
-            onDismissRequest = {},
-            title = { Text("USUARIO DESACTIVADO") },
-            text = {
-                Text("Hola $name. Tu usuario fue desactivado. Para más información, comunicate con el Administrador de Punto25. Muchas gracias")
-            },
-            confirmButton = {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    TextButton(onClick = {
-                        deactivatedRiderName = null
-                        password = ""
-                        confirm = ""
-                        c.logoutRider()
-                    }) { Text("ACEPTAR") }
-                }
-            }
-        )
-    }
-}
-
-@Composable
 private fun HomeScreen(
     c: MandadosController,
     onCategory: (ServiceCategory) -> Unit,
@@ -1081,7 +1014,7 @@ private fun DeliveryForm(
         Spacer(Modifier.height(16.dp))
         Text("Entrega", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Field("Dirección (opcional si marcás el pin)", d.destinationAddress) { c.draft = c.draft.copy(destinationAddress = it) }
-        Field("Referencia (opcional)", d.destinationReference) { c.draft = c.draft.copy(destinationReference = it) }
+        Field("Referencia de entrega", d.destinationReference) { c.draft = c.draft.copy(destinationReference = it) }
         if (autoZones) {
             AutomaticZoneField(c, d.destinationLocation, "Zona de entrega")
         } else {
