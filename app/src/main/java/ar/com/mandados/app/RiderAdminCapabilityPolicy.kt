@@ -6,20 +6,11 @@ import java.time.format.DateTimeFormatter
 
 internal suspend fun RiderAdminCapabilityService.createForCurrentState(
     riderCode: String
-): Result<RiderAdminCapability> {
-    val enrollment = create(riderCode, RiderCapabilityKind.ENROLLMENT)
-    if (enrollment.isSuccess) return enrollment
+): Result<RiderAdminCapability> = createForExistingFlow(riderCode)
 
-    val error = enrollment.exceptionOrNull()
-    return if (error is RiderBackendException && error.statusCode == 409 && error.backendCode == "already_enrolled") {
-        create(riderCode, RiderCapabilityKind.RECOVERY)
-    } else {
-        enrollment
-    }
-}
-
-internal fun riderCapabilityExpiryText(expiresAt: String): String? {
-    val instant = runCatching { Instant.parse(expiresAt) }.getOrNull() ?: return null
+internal fun riderCapabilityExpiryText(expiresAt: Long): String? {
+    if (expiresAt <= 0L) return null
+    val instant = runCatching { Instant.ofEpochMilli(expiresAt) }.getOrNull() ?: return null
     return DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
         .withZone(ZoneId.systemDefault())
         .format(instant)
