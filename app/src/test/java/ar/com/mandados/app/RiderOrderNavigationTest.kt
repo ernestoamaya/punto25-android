@@ -6,10 +6,7 @@ import android.content.Intent
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.util.Base64
 import java.util.Locale
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.PBEKeySpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -26,13 +23,12 @@ import org.robolectric.annotation.Config
 class RiderOrderNavigationTest {
     private lateinit var context: Context
     private val stamp = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
-    private val passwordA = "RiderA123"
-    private val passwordB = "RiderB123"
 
     @Before
     fun setUp() {
         context = RuntimeEnvironment.getApplication()
         context.getSharedPreferences("mandados_alpha1", Context.MODE_PRIVATE).edit().clear().commit()
+        clearRiderSessionForTest()
     }
 
     @Test
@@ -43,21 +39,17 @@ class RiderOrderNavigationTest {
             originLocation = GeoPoint(-35.432471, -60.171559),
             destinationLocation = GeoPoint(-35.430100, -60.170200)
         )
-        seed(
-            riders = listOf(riderA, riderB),
-            credentials = listOf(testCredential(riderA.id, passwordA), testCredential(riderB.id, passwordB)),
-            orders = listOf(order)
-        )
+        seed(listOf(riderA, riderB), listOf(order))
         val c = MandadosController(context)
 
-        assertTrue(c.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id)
         assertEquals(2, authenticatedRiderNavigationDestinations(c, riderA.id, order.id).size)
         assertTrue(authenticatedRiderNavigationDestinations(c, riderB.id, order.id).isEmpty())
 
         c.logoutRider()
         assertTrue(authenticatedRiderNavigationDestinations(c, riderA.id, order.id).isEmpty())
 
-        assertTrue(c.authenticateRider(riderB.id, passwordB))
+        authorizeRiderForTest(riderB.id)
         assertTrue(authenticatedRiderNavigationDestinations(c, riderB.id, order.id).isEmpty())
     }
 
@@ -67,7 +59,6 @@ class RiderOrderNavigationTest {
         try {
             Locale.setDefault(Locale.FRANCE)
             val uri = riderNavigationUri(GeoPoint(-35.432471, -60.171559))
-
             assertEquals("geo:-35.432471,-60.171559?q=-35.432471,-60.171559", uri.toString())
         } finally {
             Locale.setDefault(previous)
@@ -82,7 +73,6 @@ class RiderOrderNavigationTest {
             storeLocation = GeoPoint(5.0, 6.0),
             prePickupLocation = GeoPoint(7.0, 8.0)
         )
-
         assertEquals(
             listOf(RiderOrderNavigationPoint.ORIGIN, RiderOrderNavigationPoint.DESTINATION),
             riderOrderNavigationDestinations(order).map { it.type }
@@ -103,7 +93,6 @@ class RiderOrderNavigationTest {
             storeLocation = GeoPoint(5.0, 6.0),
             destinationLocation = GeoPoint(7.0, 8.0)
         )
-
         assertEquals(
             listOf(
                 RiderOrderNavigationPoint.PRE_PICKUP,
@@ -129,9 +118,9 @@ class RiderOrderNavigationTest {
             originLocation = GeoPoint(-35.432471, -60.171559),
             destinationLocation = GeoPoint(-35.430100, -60.170200)
         )
-        seed(listOf(target), listOf(testCredential(target.id, passwordA)), listOf(order))
+        seed(listOf(target), listOf(order))
         val c = MandadosController(context)
-        assertTrue(c.authenticateRider(target.id, passwordA))
+        authorizeRiderForTest(target.id)
 
         val ordersBefore = c.orders
         val draftBefore = c.draft
@@ -159,7 +148,6 @@ class RiderOrderNavigationTest {
             GeoPoint(-35.432471, -60.171559)
         )
         val intent = riderNavigationIntent(destination)
-
         assertEquals(Intent.ACTION_VIEW, intent.action)
         assertEquals("geo", intent.data?.scheme)
         assertNull(intent.`package`)
@@ -170,9 +158,7 @@ class RiderOrderNavigationTest {
         val intent = riderNavigationIntent(
             RiderOrderNavigationDestination(RiderOrderNavigationPoint.DESTINATION, GeoPoint(-35.4, -60.1))
         )
-
         val result = launchRiderNavigation(intent) { throw ActivityNotFoundException("fixture") }
-
         assertEquals(RiderNavigationLaunchResult.NO_HANDLER, result)
         val ui = projectFile("app/src/main/java/ar/com/mandados/app/OperationsScreens.kt")
         assertTrue(ui.contains("No hay una aplicación de mapas compatible instalada."))
@@ -191,7 +177,6 @@ class RiderOrderNavigationTest {
             "com.google.android.geo.API_KEY",
             "MAPS_API_KEY"
         )
-
         forbidden.forEach { token ->
             assertFalse("Dependencia Google Maps prohibida: $token", navigation.contains(token))
             assertFalse("Dependencia Google Maps prohibida: $token", gradle.contains(token))
@@ -204,14 +189,9 @@ class RiderOrderNavigationTest {
         assertFalse(navigation.contains("com.google.android.apps.maps"))
     }
 
-    private fun seed(
-        riders: List<RiderProfile>,
-        credentials: List<RiderCredential>,
-        orders: List<LocalOrder>
-    ) {
+    private fun seed(riders: List<RiderProfile>, orders: List<LocalOrder>) {
         val store = LocalStore(context)
         store.saveRiders(riders)
-        store.saveRiderCredentials(credentials)
         store.saveOrders(orders)
         val shifts = ShiftStoreV2(context)
         assertTrue(shifts.initializeIfNeeded().success)
@@ -245,30 +225,8 @@ class RiderOrderNavigationTest {
         assignedRiderId = riderId
     )
 
-    private fun testCredential(riderId: String, password: String): RiderCredential {
-        val salt = ("p25-$riderId-test-salt").toByteArray().copyOf(16)
-        val iterations = 1_000
-        val spec = PBEKeySpec(password.toCharArray(), salt, iterations, 256)
-        val hash = try {
-            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
-        } finally {
-            spec.clearPassword()
-        }
-        return RiderCredential(
-            riderId = riderId,
-            saltBase64 = Base64.getEncoder().encodeToString(salt),
-            passwordHashBase64 = Base64.getEncoder().encodeToString(hash),
-            iterations = iterations,
-            updatedAt = LocalDateTime.now().format(stamp)
-        )
-    }
-
     private fun projectFile(repoRelativePath: String): String {
-        val candidates = listOf(
-            File(repoRelativePath),
-            File("../$repoRelativePath"),
-            File("../../$repoRelativePath")
-        )
+        val candidates = listOf(File(repoRelativePath), File("../$repoRelativePath"), File("../../$repoRelativePath"))
         return candidates.firstOrNull { it.isFile }?.readText()
             ?: error("No se encontró source de regresión: $repoRelativePath")
     }
