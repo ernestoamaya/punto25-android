@@ -1,0 +1,545 @@
+package ar.com.mandados.app
+
+import android.content.Context
+import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
+import com.google.firebase.auth.EmailAuthProvider
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.time.Instant
+import java.util.UUID
+
+internal const val RIDER_SESSION_HEADER = "X-Punto25-Rider-Session"
+internal const val RIDER_PASSWORD_MIN_LENGTH = 15
+internal const val RIDER_PASSWORD_MAX_LENGTH = 4096
+
+internal data class RiderSessionContext(
+    val riderCode: String,
+    val sessionId: String,
+    val sessionEpoch: Long,
+    val expiresAt: String
+) {
+    fun isStructurallyValid(now: Instant = Instant.now()): Boolean {
+        if (riderCode.isBlank() || sessionId.isBlank() || sessionEpoch < 1L) return false
+        val expiry = runCatching { Instant.parse(expiresAt) }.getOrNull() ?: return false
+        return expiry.isAfter(now)
+    }
+}
+
+internal enum class RiderCapabilityKind {
+    ENROLLMENT,
+    RECOVERY
+}
+
+internal data class RiderCapabilityPreparation(
+    val kind: RiderCapabilityKind,
+    val riderCode: String,
+    val authAlias: String,
+    val generation: Long
+)
+
+internal data class RiderAdminCapability(
+    val riderCode: String,
+    val kind: RiderCapabilityKind,
+    val generation: Long,
+    val capability: String,
+    val expiresAt: String
+)
+
+internal data class RiderAuthAttemptKeys(
+    val enrollmentPrepare: String = newIdempotencyKey(),
+    val recoveryPrepare: String = newIdempotencyKey(),
+    val complete: String = newIdempotencyKey(),
+    val session: String = newIdempotencyKey()
+)
+
+internal data class RiderLoginAttemptKeys(
+    val session: String = newIdempotencyKey()
+)
+
+internal fun newIdempotencyKey(): String = UUID.randomUUID().toString()
+
+internal fun riderPasswordIsValid(password: String): Boolean =
+    password.length in RIDER_PASSWORD_MIN_LENGTH..RIDER_PASSWORD_MAX_LENGTH
+
+internal class RiderBackendException(
+    val statusCode: Int,
+    val backendCode: String?
+) : Exception("Rider backend request failed")
+
+internal interface RiderFirebaseGateway {
+    fun isConfigured(): Boolean
+    fun hasCurrentUser(): Boolean
+    fun currentUid(): String?
+    fun currentEmail(): String?
+    suspend fun signIn(authAlias: String, password: String)
+    suspend fun createUser(authAlias: String, password: String)
+    suspend fun idToken(forceRefresh: Boolean = false): String?
+    suspend fun reauthenticateAndUpdatePassword(currentPassword: String, newPassword: String)
+    fun signOut()
+}
+
+internal interface RiderBackendGateway {
+    fun isConfigured(): Boolean
+    suspend fun broker(riderCode: String, password: String): String
+    suspend fun prepare(
+        kind: RiderCapabilityKind,
+        capability: String,
+        idempotencyKey: String
+    ): RiderCapabilityPreparation
+    suspend fun complete(
+        kind: RiderCapabilityKind,
+        capability: String,
+        firebaseIdToken: String,
+        idempotencyKey: String
+    )
+    suspend fun createSession(firebaseIdToken: String, idempotencyKey: String): RiderSessionContext
+    suspend fun getSession(firebaseIdToken: String, sessionId: String): RiderSessionContext
+    suspend fun deleteSession(firebaseIdToken: String, sessionId: String)
+    suspend fun createAdminCapability(
+        adminIdToken: String,
+        riderCode: String,
+        kind: RiderCapabilityKind
+    ): RiderAdminCapability
+}
+
+internal interface RiderSessionCache {
+    fun load(): RiderSessionContext?
+    fun save(context: RiderSessionContext)
+    fun clear()
+}
+
+internal class AndroidRiderSessionCache(context: Context) : RiderSessionCache {
+    private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    override fun load(): RiderSessionContext? {
+        val riderCode = prefs.getString(KEY_RIDER_CODE, null) ?: return null
+        val sessionId = prefs.getString(KEY_SESSION_ID, null) ?: return null
+        val sessionEpoch = prefs.getLong(KEY_SESSION_EPOCH, -1L)
+        val expiresAt = prefs.getString(KEY_EXPIRES_AT, null) ?: return null
+        return RiderSessionContext(riderCode, sessionId, sessionEpoch, expiresAt)
+    }
+
+    override fun save(context: RiderSessionContext) {
+        prefs.edit()
+            .putString(KEY_RIDER_CODE, context.riderCode)
+            .putString(KEY_SESSION_ID, context.sessionId)
+            .putLong(KEY_SESSION_EPOCH, context.sessionEpoch)
+            .putString(KEY_EXPIRES_AT, context.expiresAt)
+            .apply()
+    }
+
+    override fun clear() {
+        prefs.edit().clear().apply()
+    }
+
+    private companion object {
+        const val PREFS = "punto25_rider_session_cache"
+        const val KEY_RIDER_CODE = "rider_code"
+        const val KEY_SESSION_ID = "session_id"
+        const val KEY_SESSION_EPOCH = "session_epoch"
+        const val KEY_EXPIRES_AT = "expires_at"
+    }
+}
+
+internal sealed class RiderAuthOutcome {
+    data class Authorized(val session: RiderSessionContext) : RiderAuthOutcome()
+    data class Rejected(val recoverableMessage: String) : RiderAuthOutcome()
+}
+
+internal class RiderAuthSessionCoordinator(
+    private val firebase: RiderFirebaseGateway,
+    private val backend: RiderBackendGateway,
+    private val cache: RiderSessionCache
+) {
+    suspend fun login(
+        riderCode: String,
+        password: String,
+        keys: RiderLoginAttemptKeys
+    ): RiderAuthOutcome = guarded {
+        requireConfigured()
+        if (!riderPasswordIsValid(password)) return@guarded rejected()
+        val normalizedRiderCode = riderCode.trim()
+        if (normalizedRiderCode.isBlank()) return@guarded rejected()
+
+        val authAlias = backend.broker(normalizedRiderCode, password)
+        if (authAlias.isBlank()) return@guarded rejected()
+        firebase.signIn(authAlias, password)
+        val token = firebase.idToken(forceRefresh = true).orEmpty()
+        if (token.isBlank()) return@guarded rejected()
+        val session = backend.createSession(token, keys.session)
+        if (!session.isStructurallyValid() || !session.riderCode.equals(normalizedRiderCode, ignoreCase = true)) {
+            return@guarded rejected()
+        }
+        cache.save(session)
+        RiderAuthOutcome.Authorized(session)
+    }
+
+    suspend fun activateWithCapability(
+        capability: String,
+        password: String,
+        keys: RiderAuthAttemptKeys
+    ): RiderAuthOutcome = guarded {
+        requireConfigured()
+        if (capability.isEmpty() || !riderPasswordIsValid(password)) return@guarded rejected()
+
+        val preparation = prepareCapability(capability, keys)
+        if (preparation.authAlias.isBlank() || preparation.riderCode.isBlank() || preparation.generation < 1L) {
+            return@guarded rejected()
+        }
+
+        ensureFirebaseUser(preparation.authAlias, password)
+        val completeToken = firebase.idToken(forceRefresh = true).orEmpty()
+        if (completeToken.isBlank()) return@guarded rejected()
+        backend.complete(preparation.kind, capability, completeToken, keys.complete)
+
+        val sessionToken = firebase.idToken(forceRefresh = true).orEmpty()
+        if (sessionToken.isBlank()) return@guarded rejected()
+        val session = backend.createSession(sessionToken, keys.session)
+        if (!session.isStructurallyValid() || !session.riderCode.equals(preparation.riderCode, ignoreCase = true)) {
+            return@guarded rejected()
+        }
+        cache.save(session)
+        RiderAuthOutcome.Authorized(session)
+    }
+
+    suspend fun restore(): RiderAuthOutcome {
+        val hint = cache.load() ?: return RiderAuthOutcome.Rejected("Volvé a iniciar sesión para continuar.")
+        return guarded {
+            requireConfigured()
+            if (!hint.isStructurallyValid() || !firebase.hasCurrentUser()) return@guarded rejected()
+            val token = firebase.idToken(forceRefresh = true).orEmpty()
+            if (token.isBlank()) return@guarded rejected()
+            val verified = backend.getSession(token, hint.sessionId)
+            if (!verified.isStructurallyValid() || verified.sessionId != hint.sessionId ||
+                verified.sessionEpoch != hint.sessionEpoch ||
+                !verified.riderCode.equals(hint.riderCode, ignoreCase = true)
+            ) {
+                return@guarded rejected()
+            }
+            cache.save(verified)
+            RiderAuthOutcome.Authorized(verified)
+        }
+    }
+
+    suspend fun logout(session: RiderSessionContext?) {
+        try {
+            if (session != null && session.sessionId.isNotBlank() && firebase.hasCurrentUser() && backend.isConfigured()) {
+                val token = runCatching { firebase.idToken(forceRefresh = true) }.getOrNull().orEmpty()
+                if (token.isNotBlank()) runCatching { backend.deleteSession(token, session.sessionId) }
+            }
+        } finally {
+            cache.clear()
+            firebase.signOut()
+        }
+    }
+
+    suspend fun changePassword(
+        session: RiderSessionContext?,
+        currentPassword: String,
+        newPassword: String
+    ): Boolean {
+        if (session == null || !session.isStructurallyValid() || !riderPasswordIsValid(newPassword)) return false
+        if (!firebase.isConfigured() || !firebase.hasCurrentUser()) return false
+        return runCatching {
+            firebase.reauthenticateAndUpdatePassword(currentPassword, newPassword)
+            true
+        }.getOrDefault(false)
+    }
+
+    private suspend fun prepareCapability(
+        capability: String,
+        keys: RiderAuthAttemptKeys
+    ): RiderCapabilityPreparation {
+        return try {
+            backend.prepare(RiderCapabilityKind.ENROLLMENT, capability, keys.enrollmentPrepare)
+        } catch (error: RiderBackendException) {
+            if (error.statusCode != 401 || error.backendCode != "invalid_capability") throw error
+            backend.prepare(RiderCapabilityKind.RECOVERY, capability, keys.recoveryPrepare)
+        }
+    }
+
+    private suspend fun ensureFirebaseUser(authAlias: String, password: String) {
+        if (firebase.hasCurrentUser() && firebase.currentEmail() == authAlias) return
+        firebase.signOut()
+        try {
+            firebase.createUser(authAlias, password)
+        } catch (_: Exception) {
+            // A retry may arrive after Firebase user creation succeeded but before backend completion.
+            firebase.signIn(authAlias, password)
+        }
+        if (!firebase.currentEmail().orEmpty().equals(authAlias, ignoreCase = false)) {
+            throw IllegalStateException("Rider Firebase user does not match backend alias")
+        }
+    }
+
+    private fun requireConfigured() {
+        if (!firebase.isConfigured() || !backend.isConfigured()) throw IllegalStateException("Rider auth is not configured")
+    }
+
+    private suspend fun guarded(block: suspend () -> RiderAuthOutcome): RiderAuthOutcome {
+        return try {
+            block()
+        } catch (_: Exception) {
+            cache.clear()
+            firebase.signOut()
+            rejected()
+        }
+    }
+
+    private fun rejected(): RiderAuthOutcome.Rejected =
+        RiderAuthOutcome.Rejected("No pudimos validar tu acceso. Revisá los datos o intentá nuevamente.")
+}
+
+internal object RiderFirebaseAuthIntegration : RiderFirebaseGateway {
+    private const val APP_NAME = "punto25-rider-auth"
+
+    private fun optionsOrNull(): FirebaseOptions? {
+        if (BuildConfig.FIREBASE_API_KEY.isBlank() || BuildConfig.FIREBASE_APP_ID.isBlank() || BuildConfig.FIREBASE_PROJECT_ID.isBlank()) {
+            return null
+        }
+        return FirebaseOptions.Builder()
+            .setApiKey(BuildConfig.FIREBASE_API_KEY)
+            .setApplicationId(BuildConfig.FIREBASE_APP_ID)
+            .setProjectId(BuildConfig.FIREBASE_PROJECT_ID)
+            .build()
+    }
+
+    private fun app(context: Context): FirebaseApp? {
+        val appContext = context.applicationContext
+        val options = optionsOrNull() ?: return null
+        return FirebaseApp.getApps(appContext).firstOrNull { it.name == APP_NAME }
+            ?: synchronized(this) {
+                FirebaseApp.getApps(appContext).firstOrNull { it.name == APP_NAME }
+                    ?: FirebaseApp.initializeApp(appContext, options, APP_NAME)
+            }
+    }
+
+    private fun auth(context: Context): FirebaseAuth? = app(context)?.let(FirebaseAuth::getInstance)
+
+    private var applicationContext: Context? = null
+
+    fun bind(context: Context): RiderFirebaseAuthIntegration {
+        applicationContext = context.applicationContext
+        return this
+    }
+
+    private fun boundAuth(): FirebaseAuth? = applicationContext?.let(::auth)
+
+    override fun isConfigured(): Boolean = optionsOrNull() != null && applicationContext != null
+    override fun hasCurrentUser(): Boolean = boundAuth()?.currentUser != null
+    override fun currentUid(): String? = boundAuth()?.currentUser?.uid
+    override fun currentEmail(): String? = boundAuth()?.currentUser?.email
+
+    override suspend fun signIn(authAlias: String, password: String) {
+        val auth = boundAuth() ?: error("Rider Firebase is not configured")
+        auth.signInWithEmailAndPassword(authAlias, password).await()
+    }
+
+    override suspend fun createUser(authAlias: String, password: String) {
+        val auth = boundAuth() ?: error("Rider Firebase is not configured")
+        auth.createUserWithEmailAndPassword(authAlias, password).await()
+    }
+
+    override suspend fun idToken(forceRefresh: Boolean): String? =
+        boundAuth()?.currentUser?.getIdToken(forceRefresh)?.await()?.token
+
+    override suspend fun reauthenticateAndUpdatePassword(currentPassword: String, newPassword: String) {
+        val user = boundAuth()?.currentUser ?: error("Rider Firebase user missing")
+        val email = user.email ?: error("Rider Firebase email missing")
+        user.reauthenticate(EmailAuthProvider.getCredential(email, currentPassword)).await()
+        user.updatePassword(newPassword).await()
+    }
+
+    override fun signOut() {
+        boundAuth()?.signOut()
+    }
+}
+
+internal class HttpRiderBackendGateway(private val context: Context) : RiderBackendGateway {
+    private val baseUrl: String
+        get() = BuildConfig.PUNTO25_API_BASE_URL.trimEnd('/')
+
+    override fun isConfigured(): Boolean = baseUrl.startsWith("https://")
+
+    override suspend fun broker(riderCode: String, password: String): String {
+        val response = request(
+            method = "POST",
+            path = "/v1/rider/auth/broker",
+            body = JSONObject().put("riderCode", riderCode).put("password", password)
+        )
+        return response.optString("authAlias").takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Missing authAlias")
+    }
+
+    override suspend fun prepare(
+        kind: RiderCapabilityKind,
+        capability: String,
+        idempotencyKey: String
+    ): RiderCapabilityPreparation {
+        val response = request(
+            method = "POST",
+            path = kind.path("prepare"),
+            idempotencyKey = idempotencyKey,
+            body = JSONObject().put("capability", capability)
+        )
+        return RiderCapabilityPreparation(
+            kind = kind,
+            riderCode = response.optString("riderCode"),
+            authAlias = response.optString("authAlias"),
+            generation = response.optLong("generation", -1L)
+        )
+    }
+
+    override suspend fun complete(
+        kind: RiderCapabilityKind,
+        capability: String,
+        firebaseIdToken: String,
+        idempotencyKey: String
+    ) {
+        request(
+            method = "POST",
+            path = kind.path("complete"),
+            bearer = firebaseIdToken,
+            idempotencyKey = idempotencyKey,
+            body = JSONObject().put("capability", capability)
+        )
+    }
+
+    override suspend fun createSession(firebaseIdToken: String, idempotencyKey: String): RiderSessionContext =
+        parseSession(
+            request(
+                method = "POST",
+                path = "/v1/rider/session",
+                bearer = firebaseIdToken,
+                idempotencyKey = idempotencyKey,
+                body = JSONObject()
+            )
+        )
+
+    override suspend fun getSession(firebaseIdToken: String, sessionId: String): RiderSessionContext =
+        parseSession(
+            request(
+                method = "GET",
+                path = "/v1/rider/session",
+                bearer = firebaseIdToken,
+                riderSessionId = sessionId
+            )
+        )
+
+    override suspend fun deleteSession(firebaseIdToken: String, sessionId: String) {
+        request(
+            method = "DELETE",
+            path = "/v1/rider/session",
+            bearer = firebaseIdToken,
+            riderSessionId = sessionId
+        )
+    }
+
+    override suspend fun createAdminCapability(
+        adminIdToken: String,
+        riderCode: String,
+        kind: RiderCapabilityKind
+    ): RiderAdminCapability {
+        val pathKind = if (kind == RiderCapabilityKind.ENROLLMENT) "enrollment" else "recovery"
+        val response = request(
+            method = "POST",
+            path = "/v1/admin/riders/${riderCode.trim()}/$pathKind-capabilities",
+            bearer = adminIdToken,
+            body = JSONObject()
+        )
+        val responseKind = when (response.optString("kind")) {
+            "ENROLLMENT" -> RiderCapabilityKind.ENROLLMENT
+            "RECOVERY" -> RiderCapabilityKind.RECOVERY
+            else -> throw IllegalStateException("Unknown Rider capability kind")
+        }
+        return RiderAdminCapability(
+            riderCode = response.optString("riderCode"),
+            kind = responseKind,
+            generation = response.optLong("generation", -1L),
+            capability = response.optString("capability"),
+            expiresAt = response.optString("expiresAt")
+        ).also {
+            if (it.riderCode.isBlank() || it.generation < 1L || it.capability.isBlank() ||
+                runCatching { Instant.parse(it.expiresAt) }.isFailure
+            ) throw IllegalStateException("Invalid Rider capability response")
+        }
+    }
+
+    private fun RiderCapabilityKind.path(action: String): String = when (this) {
+        RiderCapabilityKind.ENROLLMENT -> "/v1/rider/enrollment/$action"
+        RiderCapabilityKind.RECOVERY -> "/v1/rider/recovery/$action"
+    }
+
+    private fun parseSession(json: JSONObject): RiderSessionContext = RiderSessionContext(
+        riderCode = json.optString("riderCode"),
+        sessionId = json.optString("sessionId"),
+        sessionEpoch = json.optLong("sessionEpoch", -1L),
+        expiresAt = json.optString("expiresAt")
+    )
+
+    private suspend fun request(
+        method: String,
+        path: String,
+        bearer: String? = null,
+        idempotencyKey: String? = null,
+        riderSessionId: String? = null,
+        body: JSONObject? = null
+    ): JSONObject = withContext(Dispatchers.IO) {
+        if (!isConfigured()) throw IllegalStateException("Punto25 backend is not configured")
+        val connection = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 10_000
+            readTimeout = 10_000
+            setRequestProperty("Accept", "application/json")
+            if (!bearer.isNullOrBlank()) setRequestProperty("Authorization", "Bearer $bearer")
+            if (!idempotencyKey.isNullOrBlank()) setRequestProperty("Idempotency-Key", idempotencyKey)
+            if (!riderSessionId.isNullOrBlank()) setRequestProperty(RIDER_SESSION_HEADER, riderSessionId)
+            if (body != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+        }
+        try {
+            if (body != null) {
+                connection.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(body.toString()) }
+            }
+            val status = connection.responseCode
+            val raw = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            val json = if (raw.isBlank()) JSONObject() else runCatching { JSONObject(raw) }.getOrElse { JSONObject() }
+            if (status !in 200..299) {
+                throw RiderBackendException(status, json.optString("error").takeIf { it.isNotBlank() })
+            }
+            json
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+
+internal class RiderAdminCapabilityService(
+    private val context: Context,
+    private val backend: RiderBackendGateway = HttpRiderBackendGateway(context)
+) {
+    suspend fun create(riderCode: String, kind: RiderCapabilityKind): Result<RiderAdminCapability> = runCatching {
+        if (!backend.isConfigured()) error("Backend no configurado")
+        val token = AdminGoogleAuthIntegration.currentIdToken(context).orEmpty()
+        if (token.isBlank()) error("Sesión Admin no disponible")
+        backend.createAdminCapability(token, riderCode, kind)
+    }
+}
+
+internal fun createRiderCoordinator(context: Context): RiderAuthSessionCoordinator {
+    val appContext = context.applicationContext
+    return RiderAuthSessionCoordinator(
+        firebase = RiderFirebaseAuthIntegration.bind(appContext),
+        backend = HttpRiderBackendGateway(appContext),
+        cache = AndroidRiderSessionCache(appContext)
+    )
+}
