@@ -11,7 +11,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.time.Instant
 import java.util.UUID
 
 internal const val RIDER_SESSION_HEADER = "X-Punto25-Rider-Session"
@@ -22,12 +21,37 @@ internal data class RiderSessionContext(
     val riderCode: String,
     val sessionId: String,
     val sessionEpoch: Long,
-    val expiresAt: String
+    val expiresAt: Long
 ) {
-    fun isStructurallyValid(now: Instant = Instant.now()): Boolean {
-        if (riderCode.isBlank() || sessionId.isBlank() || sessionEpoch < 1L) return false
-        val expiry = runCatching { Instant.parse(expiresAt) }.getOrNull() ?: return false
-        return expiry.isAfter(now)
+    fun isStructurallyValid(nowMillis: Long = System.currentTimeMillis()): Boolean =
+        riderCode.isNotBlank() &&
+            sessionId.isNotBlank() &&
+            sessionEpoch >= 1L &&
+            expiresAt > nowMillis
+}
+
+internal object RiderSessionAuthority {
+    @Volatile
+    private var current: RiderSessionContext? = null
+
+    fun install(context: RiderSessionContext) {
+        current = context.takeIf { it.isStructurallyValid() }
+    }
+
+    fun snapshot(nowMillis: Long = System.currentTimeMillis()): RiderSessionContext? {
+        val candidate = current
+        if (candidate == null || !candidate.isStructurallyValid(nowMillis)) {
+            current = null
+            return null
+        }
+        return candidate
+    }
+
+    fun matches(riderCode: String, nowMillis: Long = System.currentTimeMillis()): Boolean =
+        snapshot(nowMillis)?.riderCode?.equals(riderCode, ignoreCase = true) == true
+
+    fun clear() {
+        current = null
     }
 }
 
@@ -48,7 +72,7 @@ internal data class RiderAdminCapability(
     val kind: RiderCapabilityKind,
     val generation: Long,
     val capability: String,
-    val expiresAt: String
+    val expiresAt: Long
 )
 
 internal data class RiderAuthAttemptKeys(
@@ -121,7 +145,7 @@ internal class AndroidRiderSessionCache(context: Context) : RiderSessionCache {
         val riderCode = prefs.getString(KEY_RIDER_CODE, null) ?: return null
         val sessionId = prefs.getString(KEY_SESSION_ID, null) ?: return null
         val sessionEpoch = prefs.getLong(KEY_SESSION_EPOCH, -1L)
-        val expiresAt = prefs.getString(KEY_EXPIRES_AT, null) ?: return null
+        val expiresAt = prefs.getLong(KEY_EXPIRES_AT, -1L)
         return RiderSessionContext(riderCode, sessionId, sessionEpoch, expiresAt)
     }
 
@@ -130,7 +154,7 @@ internal class AndroidRiderSessionCache(context: Context) : RiderSessionCache {
             .putString(KEY_RIDER_CODE, context.riderCode)
             .putString(KEY_SESSION_ID, context.sessionId)
             .putLong(KEY_SESSION_EPOCH, context.sessionEpoch)
-            .putString(KEY_EXPIRES_AT, context.expiresAt)
+            .putLong(KEY_EXPIRES_AT, context.expiresAt)
             .apply()
     }
 
@@ -176,7 +200,7 @@ internal class RiderAuthSessionCoordinator(
         if (!session.isStructurallyValid() || !session.riderCode.equals(normalizedRiderCode, ignoreCase = true)) {
             return@guarded rejected()
         }
-        cache.save(session)
+        installVerified(session)
         RiderAuthOutcome.Authorized(session)
     }
 
@@ -204,34 +228,39 @@ internal class RiderAuthSessionCoordinator(
         if (!session.isStructurallyValid() || !session.riderCode.equals(preparation.riderCode, ignoreCase = true)) {
             return@guarded rejected()
         }
-        cache.save(session)
+        installVerified(session)
         RiderAuthOutcome.Authorized(session)
     }
 
     suspend fun restore(): RiderAuthOutcome {
-        val hint = cache.load() ?: return RiderAuthOutcome.Rejected("Volvé a iniciar sesión para continuar.")
-        return guarded {
-            requireConfigured()
-            if (!hint.isStructurallyValid() || !firebase.hasCurrentUser()) return@guarded rejected()
-            val token = firebase.idToken(forceRefresh = true).orEmpty()
-            if (token.isBlank()) return@guarded rejected()
-            val verified = backend.getSession(token, hint.sessionId)
-            if (!verified.isStructurallyValid() || verified.sessionId != hint.sessionId ||
-                verified.sessionEpoch != hint.sessionEpoch ||
-                !verified.riderCode.equals(hint.riderCode, ignoreCase = true)
-            ) {
-                return@guarded rejected()
-            }
-            cache.save(verified)
-            RiderAuthOutcome.Authorized(verified)
+        val hint = cache.load() ?: return rejected("Volvé a iniciar sesión para continuar.")
+        return revalidate(hint)
+    }
+
+    suspend fun revalidate(session: RiderSessionContext?): RiderAuthOutcome = guarded {
+        requireConfigured()
+        val hint = session ?: return@guarded rejected()
+        if (!hint.isStructurallyValid() || !firebase.hasCurrentUser()) return@guarded rejected()
+        val token = firebase.idToken(forceRefresh = true).orEmpty()
+        if (token.isBlank()) return@guarded rejected()
+        val verified = backend.getSession(token, hint.sessionId)
+        if (!verified.isStructurallyValid() || verified.sessionId != hint.sessionId ||
+            verified.sessionEpoch != hint.sessionEpoch ||
+            !verified.riderCode.equals(hint.riderCode, ignoreCase = true)
+        ) {
+            return@guarded rejected()
         }
+        installVerified(verified)
+        RiderAuthOutcome.Authorized(verified)
     }
 
     suspend fun logout(session: RiderSessionContext?) {
+        val candidate = session ?: RiderSessionAuthority.snapshot()
+        RiderSessionAuthority.clear()
         try {
-            if (session != null && session.sessionId.isNotBlank() && firebase.hasCurrentUser() && backend.isConfigured()) {
+            if (candidate != null && candidate.sessionId.isNotBlank() && firebase.hasCurrentUser() && backend.isConfigured()) {
                 val token = runCatching { firebase.idToken(forceRefresh = true) }.getOrNull().orEmpty()
-                if (token.isNotBlank()) runCatching { backend.deleteSession(token, session.sessionId) }
+                if (token.isNotBlank()) runCatching { backend.deleteSession(token, candidate.sessionId) }
             }
         } finally {
             cache.clear()
@@ -244,12 +273,21 @@ internal class RiderAuthSessionCoordinator(
         currentPassword: String,
         newPassword: String
     ): Boolean {
-        if (session == null || !session.isStructurallyValid() || !riderPasswordIsValid(newPassword)) return false
-        if (!firebase.isConfigured() || !firebase.hasCurrentUser()) return false
+        if (!riderPasswordIsValid(newPassword)) return false
+        val verified = when (val outcome = revalidate(session)) {
+            is RiderAuthOutcome.Authorized -> outcome.session
+            is RiderAuthOutcome.Rejected -> return false
+        }
         return runCatching {
             firebase.reauthenticateAndUpdatePassword(currentPassword, newPassword)
+            RiderSessionAuthority.install(verified)
             true
-        }.getOrDefault(false)
+        }.getOrElse {
+            RiderSessionAuthority.clear()
+            cache.clear()
+            firebase.signOut()
+            false
+        }
     }
 
     private suspend fun prepareCapability(
@@ -278,6 +316,11 @@ internal class RiderAuthSessionCoordinator(
         }
     }
 
+    private fun installVerified(session: RiderSessionContext) {
+        cache.save(session)
+        RiderSessionAuthority.install(session)
+    }
+
     private fun requireConfigured() {
         if (!firebase.isConfigured() || !backend.isConfigured()) throw IllegalStateException("Rider auth is not configured")
     }
@@ -286,18 +329,19 @@ internal class RiderAuthSessionCoordinator(
         return try {
             block()
         } catch (_: Exception) {
+            RiderSessionAuthority.clear()
             cache.clear()
             firebase.signOut()
             rejected()
         }
     }
 
-    private fun rejected(): RiderAuthOutcome.Rejected =
-        RiderAuthOutcome.Rejected("No pudimos validar tu acceso. Revisá los datos o intentá nuevamente.")
+    private fun rejected(message: String = "No pudimos validar tu acceso. Revisá los datos o intentá nuevamente.") =
+        RiderAuthOutcome.Rejected(message)
 }
 
 internal object RiderFirebaseAuthIntegration : RiderFirebaseGateway {
-    private const val APP_NAME = "punto25-rider-auth"
+    internal const val APP_NAME = "punto25-rider-auth"
 
     private fun optionsOrNull(): FirebaseOptions? {
         if (BuildConfig.FIREBASE_API_KEY.isBlank() || BuildConfig.FIREBASE_APP_ID.isBlank() || BuildConfig.FIREBASE_PROJECT_ID.isBlank()) {
@@ -463,11 +507,11 @@ internal class HttpRiderBackendGateway(private val context: Context) : RiderBack
             kind = responseKind,
             generation = response.optLong("generation", -1L),
             capability = response.optString("capability"),
-            expiresAt = response.optString("expiresAt")
+            expiresAt = response.optLong("expiresAt", -1L)
         ).also {
-            if (it.riderCode.isBlank() || it.generation < 1L || it.capability.isBlank() ||
-                runCatching { Instant.parse(it.expiresAt) }.isFailure
-            ) throw IllegalStateException("Invalid Rider capability response")
+            if (it.riderCode.isBlank() || it.generation < 1L || it.capability.isBlank() || it.expiresAt <= System.currentTimeMillis()) {
+                throw IllegalStateException("Invalid Rider capability response")
+            }
         }
     }
 
@@ -480,7 +524,7 @@ internal class HttpRiderBackendGateway(private val context: Context) : RiderBack
         riderCode = json.optString("riderCode"),
         sessionId = json.optString("sessionId"),
         sessionEpoch = json.optLong("sessionEpoch", -1L),
-        expiresAt = json.optString("expiresAt")
+        expiresAt = json.optLong("expiresAt", -1L)
     )
 
     private suspend fun request(
@@ -524,14 +568,31 @@ internal class HttpRiderBackendGateway(private val context: Context) : RiderBack
 }
 
 internal class RiderAdminCapabilityService(
-    private val context: Context,
-    private val backend: RiderBackendGateway = HttpRiderBackendGateway(context)
+    private val backend: RiderBackendGateway,
+    private val adminTokenProvider: suspend () -> String?
 ) {
+    constructor(context: Context) : this(
+        backend = HttpRiderBackendGateway(context.applicationContext),
+        adminTokenProvider = { AdminGoogleAuthIntegration.currentIdToken(context.applicationContext) }
+    )
+
     suspend fun create(riderCode: String, kind: RiderCapabilityKind): Result<RiderAdminCapability> = runCatching {
         if (!backend.isConfigured()) error("Backend no configurado")
-        val token = AdminGoogleAuthIntegration.currentIdToken(context).orEmpty()
+        val token = adminTokenProvider().orEmpty()
         if (token.isBlank()) error("Sesión Admin no disponible")
         backend.createAdminCapability(token, riderCode, kind)
+    }
+
+    suspend fun createForExistingFlow(riderCode: String): Result<RiderAdminCapability> = runCatching {
+        if (!backend.isConfigured()) error("Backend no configurado")
+        val token = adminTokenProvider().orEmpty()
+        if (token.isBlank()) error("Sesión Admin no disponible")
+        try {
+            backend.createAdminCapability(token, riderCode, RiderCapabilityKind.ENROLLMENT)
+        } catch (error: RiderBackendException) {
+            if (error.statusCode != 409 || error.backendCode != "already_enrolled") throw error
+            backend.createAdminCapability(token, riderCode, RiderCapabilityKind.RECOVERY)
+        }
     }
 }
 
