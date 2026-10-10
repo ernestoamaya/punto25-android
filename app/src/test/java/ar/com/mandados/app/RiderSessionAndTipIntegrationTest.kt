@@ -15,9 +15,6 @@ import org.robolectric.annotation.Config
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.util.Base64
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.PBEKeySpec
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -51,20 +48,17 @@ class RiderSessionAndTipIntegrationTest {
         active = true
     )
 
-    private val passwordA = "RiderA123"
-    private val passwordB = "RiderB123"
-
     @Before
     fun setUp() {
         context = RuntimeEnvironment.getApplication()
         context.getSharedPreferences("mandados_alpha1", Context.MODE_PRIVATE).edit().clear().commit()
+        clearRiderSessionForTest()
     }
 
     @Test
     fun `REG-PAY-TIP-017 fixture integral 100 llega a una unica propina pendiente para Rider autenticado`() {
         val c = fixtureDeclaredTip100()
-
-        assertTrue(c.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id)
         val pending = c.pendingTipsForRider(riderA.id)
 
         assertEquals(1, pending.size)
@@ -77,7 +71,7 @@ class RiderSessionAndTipIntegrationTest {
     @Test
     fun `REG-PAY-TIP-018 confirmar deja historial confirmado y suma exactamente 100 una vez`() {
         val c = fixtureDeclaredTip100()
-        assertTrue(c.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id)
         val before = c.riderCurrentBalance(riderA.id)
 
         assertTrue(c.confirmTip(TIP_ORDER_ID, riderA.id))
@@ -92,9 +86,9 @@ class RiderSessionAndTipIntegrationTest {
     }
 
     @Test
-    fun `REG-PAY-TIP-019 reinicio y relogin conservan CONFIRMED sin perder ni duplicar`() {
+    fun `REG-PAY-TIP-019 reinicio y nueva sesion conservan CONFIRMED sin perder ni duplicar`() {
         val first = fixtureDeclaredTip100()
-        assertTrue(first.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id)
         assertTrue(first.confirmTip(TIP_ORDER_ID, riderA.id))
         val balanceAfterConfirm = first.riderCurrentBalance(riderA.id)
         first.logoutRider()
@@ -104,7 +98,7 @@ class RiderSessionAndTipIntegrationTest {
         assertNull(restarted.riderDigitalTipForOrder(TIP_ORDER_ID, riderA.id))
         assertEquals(0, restarted.riderCurrentBalance(riderA.id))
 
-        assertTrue(restarted.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id, sessionId = "test-session-restarted")
         val restored = restarted.riderDigitalTipForOrder(TIP_ORDER_ID, riderA.id)
         assertNotNull(restored)
         assertEquals(TipStatus.CONFIRMED, restored!!.tipStatus)
@@ -117,7 +111,7 @@ class RiderSessionAndTipIntegrationTest {
     @Test
     fun `REG-PAY-TIP-020 doble confirmacion no duplica saldo evento ni efecto financiero`() {
         val c = fixtureDeclaredTip100()
-        assertTrue(c.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id)
         val before = c.riderCurrentBalance(riderA.id)
 
         assertTrue(c.confirmTip(TIP_ORDER_ID, riderA.id))
@@ -138,7 +132,7 @@ class RiderSessionAndTipIntegrationTest {
     @Test
     fun `REG-PAY-TIP-021 Rider B no ve ni confirma propina de Rider A`() {
         val c = fixtureDeclaredTip100()
-        assertTrue(c.authenticateRider(riderB.id, passwordB))
+        authorizeRiderForTest(riderB.id)
 
         assertTrue(c.pendingTipsForRider(riderB.id).isEmpty())
         assertNull(c.riderDigitalTipForOrder(TIP_ORDER_ID, riderB.id))
@@ -150,7 +144,7 @@ class RiderSessionAndTipIntegrationTest {
 
     @Test
     fun `REG-RIDER-AUTH-001 sin sesion Rider las acciones self service fallan cerrado`() {
-        seedRidersAndCredentials()
+        seedRiders()
         val shift = allDayShift()
         seedV2(listOf(shift))
         val pendingOrder = pendingOrder("P25-AUTH-NOSESSION")
@@ -168,22 +162,22 @@ class RiderSessionAndTipIntegrationTest {
 
     @Test
     fun `REG-RIDER-AUTH-002 sesion Rider A no opera recursos de Rider B`() {
-        seedRidersAndCredentials()
+        seedRiders()
         val shift = allDayShift()
         seedV2(listOf(shift))
         val c = MandadosController(context)
-        assertTrue(c.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id)
 
         assertFalse(c.setRiderAvailable(riderB.id, true))
         assertFalse(c.updateRiderTransferAlias(riderB.id, "alias.b"))
         assertFalse(c.reserveShift(riderB.id, shift.id))
-        assertFalse(c.changeRiderPassword(riderB.id, passwordB, "NuevoB123"))
+        assertFalse(c.changeRiderPassword(riderB.id, "legacy-current", "N".repeat(15)))
         assertEquals("", c.rider(riderB.id)!!.transferAlias)
     }
 
     @Test
     fun `REG-PAY-AUTH-002 conocer RID asignado no alcanza para comprobante confirmar ni reportar`() {
-        seedRidersAndCredentials()
+        seedRiders()
         val order = completedTransferOrder("P25-PAY-AUTH", riderA.id)
         val payment = PaymentRecord(
             id = "PAY-${order.id}",
@@ -206,13 +200,13 @@ class RiderSessionAndTipIntegrationTest {
         assertFalse(c.riderCanConfirmTransfer(order.id, riderA.id))
         assertFalse(c.riderCanReportTransfer(order.id, riderA.id))
 
-        assertTrue(c.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id)
         assertEquals("content://proof/rider-a", c.riderPaymentForOrder(order.id, riderA.id)?.proofUri)
         assertTrue(c.riderCanAccessTransfer(order.id, riderA.id))
         assertTrue(c.riderCanConfirmTransfer(order.id, riderA.id))
 
         c.logoutRider()
-        assertTrue(c.authenticateRider(riderB.id, passwordB))
+        authorizeRiderForTest(riderB.id)
         assertNull(c.riderPaymentForOrder(order.id, riderA.id))
         assertNull(c.riderPaymentForOrder(order.id, riderB.id))
         assertFalse(c.riderCanConfirmTransfer(order.id, riderA.id))
@@ -221,7 +215,7 @@ class RiderSessionAndTipIntegrationTest {
 
     @Test
     fun `REG-SHIFT-AUTH-001 Rider A no reserva ni cancela turnos como Rider B`() {
-        seedRidersAndCredentials()
+        seedRiders()
         val shift = allDayShift()
         val reservation = ConcreteShiftReservation(
             id = "CSR-B",
@@ -232,7 +226,7 @@ class RiderSessionAndTipIntegrationTest {
         )
         seedV2(listOf(shift), listOf(reservation))
         val c = MandadosController(context)
-        assertTrue(c.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id)
 
         assertFalse(c.reserveShift(riderB.id, shift.id))
         assertFalse(c.cancelConcreteShift(reservation.id))
@@ -244,7 +238,7 @@ class RiderSessionAndTipIntegrationTest {
 
     @Test
     fun `REG-ORDER-AUTH-001 Rider A no toma ni modifica pedidos actuando como Rider B`() {
-        seedRidersAndCredentials()
+        seedRiders()
         val pending = pendingOrder("P25-PENDING")
         val assignedToB = pendingOrder("P25-RIDER-B").copy(
             status = OrderStatus.ACCEPTED,
@@ -252,7 +246,7 @@ class RiderSessionAndTipIntegrationTest {
         )
         LocalStore(context).saveOrders(listOf(pending, assignedToB))
         val c = MandadosController(context)
-        assertTrue(c.authenticateRider(riderA.id, passwordA))
+        authorizeRiderForTest(riderA.id)
 
         assertFalse(c.takeOrder(pending.id, riderB.id))
         assertFalse(c.updateOrderStatus(assignedToB.id, OrderStatus.IN_PROGRESS, actor = riderB.id))
@@ -265,7 +259,7 @@ class RiderSessionAndTipIntegrationTest {
     }
 
     private fun fixtureDeclaredTip100(): MandadosController {
-        seedRidersAndCredentials()
+        seedRiders()
         val order = completedTransferOrder(TIP_ORDER_ID, riderA.id)
         val payment = PaymentRecord(
             id = "PAY-${order.id}",
@@ -294,39 +288,14 @@ class RiderSessionAndTipIntegrationTest {
         return c
     }
 
-    private fun seedRidersAndCredentials() {
-        val store = LocalStore(context)
-        store.saveRiders(listOf(riderA, riderB))
-        store.saveRiderCredentials(
-            listOf(
-                testCredential(riderA.id, passwordA),
-                testCredential(riderB.id, passwordB)
-            )
-        )
+    private fun seedRiders() {
+        LocalStore(context).saveRiders(listOf(riderA, riderB))
     }
 
     private fun seedV2(shifts: List<ConcreteShift>, reservations: List<ConcreteShiftReservation> = emptyList()) {
         val v2 = ShiftStoreV2(context)
         assertTrue(v2.initializeIfNeeded().success)
         assertTrue(v2.saveAll(emptyList(), shifts, reservations, emptyList()))
-    }
-
-    private fun testCredential(riderId: String, password: String): RiderCredential {
-        val salt = ("p25-$riderId-test-salt").toByteArray().copyOf(16)
-        val iterations = 1_000
-        val spec = PBEKeySpec(password.toCharArray(), salt, iterations, 256)
-        val hash = try {
-            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
-        } finally {
-            spec.clearPassword()
-        }
-        return RiderCredential(
-            riderId = riderId,
-            saltBase64 = Base64.getEncoder().encodeToString(salt),
-            passwordHashBase64 = Base64.getEncoder().encodeToString(hash),
-            iterations = iterations,
-            updatedAt = nowText()
-        )
     }
 
     private fun completedTransferOrder(id: String, riderId: String): LocalOrder = LocalOrder(
