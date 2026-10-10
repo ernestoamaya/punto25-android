@@ -12,7 +12,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface {
-                    MandadosApp()
+                    RiderSessionBootstrapGate {
+                        MandadosApp()
+                    }
                 }
             }
         }
