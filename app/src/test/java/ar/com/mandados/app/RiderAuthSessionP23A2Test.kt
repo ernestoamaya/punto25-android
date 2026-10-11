@@ -1,6 +1,7 @@
 package ar.com.mandados.app
 
 import android.content.Context
+import android.util.Base64
 import com.google.firebase.FirebaseApp
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -15,6 +16,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -143,13 +146,48 @@ class RiderAuthSessionP23A2Test {
     }
 
     @Test
-    fun `REG-P23A2-LEGACY-NOAUTH-001 local credentials invitation and redeem never grant Rider authority`() {
+    fun `REG-P23A2-LEGACY-NOAUTH-001 valid persisted legacy credential and invitation cannot grant authority`() {
+        val password = "LegacyValidPass9"
+        val salt = byteArrayOf(3, 7, 11, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71)
+        val iterations = 120000
+        val spec = PBEKeySpec(password.toCharArray(), salt, iterations, 256)
+        val hash = try {
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        } finally {
+            spec.clearPassword()
+        }
+        val credential = RiderCredential(
+            riderId = "RID-LEGACY",
+            saltBase64 = Base64.encodeToString(salt, Base64.NO_WRAP),
+            passwordHashBase64 = Base64.encodeToString(hash, Base64.NO_WRAP),
+            iterations = iterations,
+            updatedAt = "01/01/2026 00:00:00"
+        )
+        val invitation = RiderInvitation(
+            id = "INV-LEGACY",
+            code = "P25-LEGACY1",
+            riderId = "RID-LEGACY",
+            phone = "2345123456",
+            createdAt = "01/01/2026 00:00:00",
+            expiresAt = "31/12/2099 23:59:59",
+            status = RiderInvitationStatus.PENDING
+        )
+        LocalStore(context).apply {
+            saveRiders(listOf(RiderProfile(id = "RID-LEGACY", name = "Legacy Rider", phone = "2345123456")))
+            saveRiderCredentials(listOf(credential))
+            saveRiderInvitations(listOf(invitation))
+        }
+
         val controller = MandadosController(context)
-        val result = controller.authenticateRiderResult("RID-LEGACY", "x".repeat(15))
+        assertTrue(controller.hasRiderCredential("RID-LEGACY"))
+        assertTrue(controller.riderInvitations.any { it.id == invitation.id && it.status == RiderInvitationStatus.PENDING })
+
+        val result = controller.authenticateRiderResult("RID-LEGACY", password)
         assertEquals(RiderAuthenticationStatus.INVALID_CREDENTIALS, result.status)
-        assertFalse(controller.authenticateRider("RID-LEGACY", "x".repeat(15)))
+        assertFalse(controller.authenticateRider("RID-LEGACY", password))
         assertNull(controller.createRiderInvitation("RID-LEGACY"))
-        assertNull(controller.redeemRiderInvitation("P25-ABC123", "x".repeat(15)))
+        assertNull(controller.redeemRiderInvitation(invitation.code, password))
+        assertFalse(controller.hasAuthenticatedRiderSession("RID-LEGACY"))
         assertNull(RiderSessionAuthority.snapshot())
     }
 
@@ -178,6 +216,8 @@ class RiderAuthSessionP23A2Test {
         assertTrue(result is RiderAuthOutcome.Rejected)
         assertEquals(listOf("get:S1"), backend.events)
         assertNull(RiderSessionAuthority.snapshot())
+        assertNull(cache.saved)
+        assertTrue(firebase.signedOut)
     }
 
     @Test
@@ -197,13 +237,50 @@ class RiderAuthSessionP23A2Test {
     }
 
     @Test
-    fun `REG-P23A2-LOGOUT-001 logout clears authority and Rider Firebase even if DELETE fails`() = runBlocking {
+    fun `REG-P23A2-REVALIDATE-MISMATCH-001 HTTP 200 exact session mismatches clear all local Rider state`() = runBlocking {
+        val active = session("RID-M", sessionId = "S-match", epoch = 7)
+        val mismatches = listOf(
+            active.copy(sessionId = "S-other"),
+            active.copy(sessionEpoch = 8),
+            active.copy(riderCode = "RID-OTHER")
+        )
+
+        mismatches.forEach { mismatch ->
+            cache.saved = active
+            RiderSessionAuthority.install(active)
+            firebase.hasUser = true
+            firebase.email = "alias@auth.punto25.invalid"
+            firebase.signedOut = false
+            backend.getSessionFailure = null
+            backend.getSessionResult = mismatch
+
+            val result = coordinator.revalidate(active)
+
+            assertTrue(result is RiderAuthOutcome.Rejected)
+            assertNull(RiderSessionAuthority.snapshot())
+            assertNull(cache.saved)
+            assertTrue(firebase.signedOut)
+        }
+    }
+
+    @Test
+    fun `REG-P23A2-LOGOUT-001 local logout is durable before token or DELETE and cannot restore after remote failure`() = runBlocking {
         val active = session("RID-L", sessionId = "S-logout")
         cache.saved = active
         RiderSessionAuthority.install(active)
         firebase.hasUser = true
+        firebase.email = "alias@auth.punto25.invalid"
         backend.deleteFailure = RiderBackendException(503, "network")
-        backend.onDeleteSession = { assertNull(RiderSessionAuthority.snapshot()) }
+        firebase.onLogoutTokenRequest = {
+            assertNull(RiderSessionAuthority.snapshot())
+            assertNull(cache.saved)
+            assertTrue(firebase.signedOut)
+        }
+        backend.onDeleteSession = {
+            assertNull(RiderSessionAuthority.snapshot())
+            assertNull(cache.saved)
+            assertTrue(firebase.signedOut)
+        }
 
         coordinator.logout(active)
 
@@ -211,6 +288,9 @@ class RiderAuthSessionP23A2Test {
         assertNull(RiderSessionAuthority.snapshot())
         assertNull(cache.saved)
         assertTrue(firebase.signedOut)
+        val restore = coordinator.restore()
+        assertTrue(restore is RiderAuthOutcome.Rejected)
+        assertNull(RiderSessionAuthority.snapshot())
     }
 
     @Test
@@ -244,6 +324,63 @@ class RiderAuthSessionP23A2Test {
         assertTrue(second is RiderAuthOutcome.Authorized)
         assertEquals(listOf("stable-key", "stable-key"), backend.sessionKeys)
         assertNotEquals(RiderLoginAttemptKeys().session, RiderLoginAttemptKeys().session)
+    }
+
+    @Test
+    fun `REG-P23A2-IDEMPOTENCY-COMPLETE-001 enrollment committed response loss reuses prepare and complete intent safely`() = runBlocking {
+        backend.prepareResult = RiderCapabilityPreparation(
+            RiderCapabilityKind.ENROLLMENT,
+            "RID-IDEM-E",
+            "idem-e@auth.punto25.invalid",
+            3
+        )
+        backend.session = session("RID-IDEM-E", sessionId = "S-idem-e", epoch = 3)
+        backend.completeResponseLossesRemaining = 1
+        backend.rejectPrepareAfterSuccess = true
+        val keys = RiderAuthAttemptKeys("prepare-e", "prepare-r", "complete-e", "session-e")
+        val capability = "EnrollmentCommittedResponseLostCapability"
+
+        val first = coordinator.activateWithCapability(capability, "e".repeat(15), keys)
+        val second = coordinator.activateWithCapability(capability, "e".repeat(15), keys)
+
+        assertTrue(first is RiderAuthOutcome.Rejected)
+        assertTrue(second is RiderAuthOutcome.Authorized)
+        assertEquals(listOf("prepare-e"), backend.prepareKeys)
+        assertEquals(listOf("complete-e", "complete-e"), backend.completeKeys)
+        assertEquals(1, backend.completeEffectCount)
+        assertEquals(listOf("session-e"), backend.sessionKeys)
+        assertEquals("RID-IDEM-E", RiderSessionAuthority.snapshot()?.riderCode)
+    }
+
+    @Test
+    fun `REG-P23A2-IDEMPOTENCY-COMPLETE-002 recovery committed response loss reuses prepare and complete intent safely`() = runBlocking {
+        backend.enrollmentPrepareFailure = RiderBackendException(401, "invalid_capability")
+        backend.recoveryPrepareResult = RiderCapabilityPreparation(
+            RiderCapabilityKind.RECOVERY,
+            "RID-IDEM-R",
+            "idem-r@auth.punto25.invalid",
+            11
+        )
+        backend.session = session("RID-IDEM-R", sessionId = "S-idem-r", epoch = 11)
+        backend.completeResponseLossesRemaining = 1
+        backend.rejectPrepareAfterSuccess = true
+        val keys = RiderAuthAttemptKeys("prepare-e", "prepare-r", "complete-r", "session-r")
+        val capability = "RecoveryCommittedResponseLostCapability"
+
+        val first = coordinator.activateWithCapability(capability, "r".repeat(15), keys)
+        val second = coordinator.activateWithCapability(capability, "r".repeat(15), keys)
+
+        assertTrue(first is RiderAuthOutcome.Rejected)
+        assertTrue(second is RiderAuthOutcome.Authorized)
+        assertEquals(
+            listOf(RiderCapabilityKind.ENROLLMENT, RiderCapabilityKind.RECOVERY),
+            backend.prepareKinds
+        )
+        assertEquals(listOf("prepare-e", "prepare-r"), backend.prepareKeys)
+        assertEquals(listOf("complete-r", "complete-r"), backend.completeKeys)
+        assertEquals(1, backend.completeEffectCount)
+        assertEquals(listOf("session-r"), backend.sessionKeys)
+        assertEquals("RID-IDEM-R", RiderSessionAuthority.snapshot()?.riderCode)
     }
 
     @Test
@@ -321,6 +458,7 @@ private class FakeRiderFirebase : RiderFirebaseGateway {
     var signOutCount = 0
     var createdEmail: String? = null
     var passwordChange: Pair<String, String>? = null
+    var onLogoutTokenRequest: (() -> Unit)? = null
     val authEvents = mutableListOf<String>()
 
     override fun isConfigured() = configured
@@ -352,6 +490,14 @@ private class FakeRiderFirebase : RiderFirebaseGateway {
         email = null
         uid = null
     }
+    override fun invalidateForLogout(): suspend () -> String? {
+        val capturedToken = token
+        signOut()
+        return {
+            onLogoutTokenRequest?.invoke()
+            capturedToken
+        }
+    }
 }
 
 private class FakeRiderBackend : RiderBackendGateway {
@@ -366,6 +512,10 @@ private class FakeRiderBackend : RiderBackendGateway {
     var getSessionFailure: Throwable? = null
     var deleteFailure: Throwable? = null
     var createSessionFailuresRemaining = 0
+    var completeResponseLossesRemaining = 0
+    var rejectPrepareAfterSuccess = false
+    var successfulPrepareCount = 0
+    var completeEffectCount = 0
     var adminCapability = RiderAdminCapability("RID-A", RiderCapabilityKind.ENROLLMENT, 1, "capability", System.currentTimeMillis() + 60_000)
     var adminEnrollmentFailure: Throwable? = null
     var completedKind: RiderCapabilityKind? = null
@@ -375,9 +525,11 @@ private class FakeRiderBackend : RiderBackendGateway {
     val completeCapabilities = mutableListOf<String>()
     val prepareKinds = mutableListOf<RiderCapabilityKind>()
     val prepareKeys = mutableListOf<String>()
+    val completeKeys = mutableListOf<String>()
     val sessionKeys = mutableListOf<String>()
     val adminKinds = mutableListOf<RiderCapabilityKind>()
     val adminTokens = mutableListOf<String>()
+    private val committedCompleteKeys = mutableSetOf<String>()
     var onCreateSession: (() -> Unit)? = null
     var onDeleteSession: (() -> Unit)? = null
 
@@ -391,16 +543,27 @@ private class FakeRiderBackend : RiderBackendGateway {
         prepareKinds += kind
         prepareCapabilities += capability
         prepareKeys += idempotencyKey
+        if (rejectPrepareAfterSuccess && successfulPrepareCount > 0) {
+            throw RiderBackendException(401, "invalid_capability")
+        }
         if (kind == RiderCapabilityKind.ENROLLMENT) {
             enrollmentPrepareFailure?.let { throw it }
+            successfulPrepareCount++
             return prepareResult.copy(kind = kind)
         }
+        successfulPrepareCount++
         return recoveryPrepareResult
     }
     override suspend fun complete(kind: RiderCapabilityKind, capability: String, firebaseIdToken: String, idempotencyKey: String) {
         completedKind = kind
         completeCapabilities += capability
         completeKey = idempotencyKey
+        completeKeys += idempotencyKey
+        if (committedCompleteKeys.add(idempotencyKey)) completeEffectCount++
+        if (completeResponseLossesRemaining > 0) {
+            completeResponseLossesRemaining--
+            throw RiderBackendException(503, "response_lost_after_commit")
+        }
     }
     override suspend fun createSession(firebaseIdToken: String, idempotencyKey: String): RiderSessionContext {
         sessionKeys += idempotencyKey
