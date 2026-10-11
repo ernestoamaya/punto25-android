@@ -15,20 +15,40 @@ class RiderLogoutBoundaryP23A2Test {
 
     @Test
     fun `REG-P23A2-LOGOUT-001 begin boundary prevents restore before any remote work`() {
-        val active = RiderSessionContext(
-            riderCode = "RID-LOGOUT",
-            sessionId = "session-logout",
-            sessionEpoch = 7,
-            expiresAt = System.currentTimeMillis() + 60_000
-        )
+        val active = session()
         val cache = BoundaryRiderCache(active)
         val firebase = BoundaryRiderFirebase()
         val backend = BoundaryRiderBackend()
         val coordinator = RiderAuthSessionCoordinator(firebase, backend, cache)
         RiderSessionAuthority.install(active)
 
-        // This is intentionally non-suspending: it is the boundary the UI can execute before
-        // scheduling token retrieval / DELETE work.
+        // Non-suspending caller boundary: this must finish before UI schedules any coroutine.
+        coordinator.beginLogout(active)
+
+        assertNull(RiderSessionAuthority.snapshot())
+        assertNull(cache.saved)
+        assertTrue(firebase.signedOut)
+        assertEquals(0, firebase.tokenRequests)
+        assertEquals(0, backend.deleteCalls)
+
+        // Model cancellation/process death before the remote phase: a later startup attempt
+        // cannot revive the session from local state even though DELETE never ran.
+        val restore = runBlocking { coordinator.restore() }
+        assertTrue(restore is RiderAuthOutcome.Rejected)
+        assertNull(RiderSessionAuthority.snapshot())
+        assertNull(cache.saved)
+        assertEquals(0, backend.deleteCalls)
+    }
+
+    @Test
+    fun `REG-P23A2-LOGOUT-001 remote revocation starts only after synchronous local invalidation`() = runBlocking {
+        val active = session()
+        val cache = BoundaryRiderCache(active)
+        val firebase = BoundaryRiderFirebase()
+        val backend = BoundaryRiderBackend()
+        val coordinator = RiderAuthSessionCoordinator(firebase, backend, cache)
+        RiderSessionAuthority.install(active)
+
         val revocation = coordinator.beginLogout(active)
 
         assertNull(RiderSessionAuthority.snapshot())
@@ -37,20 +57,20 @@ class RiderLogoutBoundaryP23A2Test {
         assertEquals(0, firebase.tokenRequests)
         assertEquals(0, backend.deleteCalls)
 
-        // Model process death / cancellation before the remote phase: local state alone cannot
-        // restore authority even though the backend DELETE has not run.
-        val restore = runBlocking { coordinator.restore() }
-        assertTrue(restore is RiderAuthOutcome.Rejected)
-        assertNull(RiderSessionAuthority.snapshot())
-        assertNull(cache.saved)
+        coordinator.finishLogout(revocation)
 
-        // If execution survives, remote revocation still runs only after the local boundary.
-        runBlocking { coordinator.finishLogout(revocation) }
         assertEquals(1, firebase.tokenRequests)
         assertEquals(1, backend.deleteCalls)
         assertNull(RiderSessionAuthority.snapshot())
         assertNull(cache.saved)
     }
+
+    private fun session() = RiderSessionContext(
+        riderCode = "RID-LOGOUT",
+        sessionId = "session-logout",
+        sessionEpoch = 7,
+        expiresAt = System.currentTimeMillis() + 60_000
+    )
 }
 
 private class BoundaryRiderCache(initial: RiderSessionContext?) : RiderSessionCache {
