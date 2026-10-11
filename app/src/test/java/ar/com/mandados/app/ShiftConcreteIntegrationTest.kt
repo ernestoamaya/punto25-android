@@ -27,6 +27,7 @@ class ShiftConcreteIntegrationTest {
     fun setUp() {
         context = RuntimeEnvironment.getApplication()
         context.getSharedPreferences("mandados_alpha1", Context.MODE_PRIVATE).edit().clear().commit()
+        clearRiderSessionForTest()
     }
 
     @Test
@@ -205,7 +206,7 @@ class ShiftConcreteIntegrationTest {
         val shift = ConcreteShift("CS-DATE", iso(LocalDate.now().plusDays(1)), 9 * 60, 12 * 60, 2)
         seedV2(shifts = listOf(shift))
         val c = MandadosController(context)
-        assertTrue(c.authenticateRider(rider.id, password))
+        authorizeRiderForTest(rider.id)
 
         assertTrue(c.reserveShift(rider.id, shift.id))
         val reservation = c.concreteShiftReservations.single()
