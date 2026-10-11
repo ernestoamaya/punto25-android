@@ -15,12 +15,12 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class RiderEligibilityBoundaryRegressionTest {
     private lateinit var context: Context
-    private val password = "RiderA123"
 
     @Before
     fun setUp() {
         context = RuntimeEnvironment.getApplication()
         context.getSharedPreferences("mandados_alpha1", Context.MODE_PRIVATE).edit().clear().commit()
+        clearRiderSessionForTest()
     }
 
     @Test
@@ -31,11 +31,9 @@ class RiderEligibilityBoundaryRegressionTest {
         store.saveOrders(listOf(assignedOrder("ASSIGNED-PENDING", rider.id)))
 
         val c = MandadosController(context)
-        val invitation = c.createRiderInvitation(rider.id)!!
-        assertEquals(rider.id, c.redeemRiderInvitation(invitation.code, password))
+        authorizeRiderForTest(rider.id)
         assertTrue(c.hasAuthenticatedRiderSession(rider.id))
         assertEquals(RiderDenialReason.PENDING_APPROVAL, c.riderExistingOrderContinuationDecision(rider.id).reason)
-
         assertFalse(c.updateOrderStatus("ASSIGNED-PENDING", OrderStatus.IN_PROGRESS, actor = rider.id))
         assertEquals(OrderStatus.ACCEPTED, c.order("ASSIGNED-PENDING")!!.status)
     }
@@ -43,18 +41,14 @@ class RiderEligibilityBoundaryRegressionTest {
     @Test
     fun `REG-RIDER-DENIAL-002 wrappers publican motivo tipado y mensaje utilizable`() {
         val rider = pendingRider("RID-PENDING-FEEDBACK")
-        val store = LocalStore(context)
-        store.saveRiders(listOf(rider))
-
+        LocalStore(context).saveRiders(listOf(rider))
         val c = MandadosController(context)
-        val invitation = c.createRiderInvitation(rider.id)!!
-        assertEquals(rider.id, c.redeemRiderInvitation(invitation.code, password))
+        authorizeRiderForTest(rider.id)
 
         assertFalse(c.setRiderAvailable(rider.id, true))
         val feedback = c.riderDenialFeedback!!
         assertEquals(RiderDenialReason.PENDING_APPROVAL, feedback.reason)
         assertTrue(riderDenialMessage(feedback).isNotBlank())
-
         c.clearRiderDenialFeedback()
         assertEquals(null, c.riderDenialFeedback)
     }
@@ -65,17 +59,10 @@ class RiderEligibilityBoundaryRegressionTest {
         val riderB = pendingRider("RID-ACTIVE-B").copy(phone = "2345555002")
         val store = LocalStore(context)
         store.saveRiders(listOf(riderA, riderB))
-        store.saveOrders(
-            listOf(
-                assignedOrder("ACTIVE-A", riderA.id),
-                assignedOrder("ACTIVE-B", riderB.id)
-            )
-        )
+        store.saveOrders(listOf(assignedOrder("ACTIVE-A", riderA.id), assignedOrder("ACTIVE-B", riderB.id)))
 
         val c = MandadosController(context)
-        val invitation = c.createRiderInvitation(riderA.id)!!
-        assertEquals(riderA.id, c.redeemRiderInvitation(invitation.code, password))
-
+        authorizeRiderForTest(riderA.id)
         assertEquals(listOf("ACTIVE-A"), authenticatedRiderActiveOrders(c, riderA.id).map { it.id })
         assertTrue(authenticatedRiderActiveOrders(c, riderB.id).isEmpty())
     }
@@ -85,10 +72,7 @@ class RiderEligibilityBoundaryRegressionTest {
         name = "Rider Pendiente",
         phone = "2345555001",
         vehicleType = VehicleType.BICYCLE,
-        documents = RiderDocuments(
-            dniFrontUri = "content://dni/front",
-            dniBackUri = "content://dni/back"
-        ),
+        documents = RiderDocuments(dniFrontUri = "content://dni/front", dniBackUri = "content://dni/back"),
         approvalStatus = RiderApprovalStatus.PENDING,
         documentReviews = mapOf(
             RiderDocumentKey.DNI_FRONT to DocumentReviewStatus.APPROVED,

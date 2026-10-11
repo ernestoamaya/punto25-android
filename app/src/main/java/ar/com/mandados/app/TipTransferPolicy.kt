@@ -1,7 +1,7 @@
 package ar.com.mandados.app
 
 internal fun riderActorMatchesAuthenticatedSession(authenticatedRiderId: String?, riderId: String): Boolean =
-    !authenticatedRiderId.isNullOrBlank() && authenticatedRiderId == riderId
+    RiderSessionAuthority.currentFor(riderId) != null
 
 internal fun canOfferDigitalTip(order: LocalOrder, tipsEnabled: Boolean): Boolean =
     tipsEnabled &&

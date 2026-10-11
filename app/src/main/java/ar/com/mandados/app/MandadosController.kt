@@ -787,18 +787,18 @@ class MandadosController(context: Context) {
                 availableUntilAt = if (active) it.availableUntilAt else null
             ) else it
         }
+        if (!active && RiderSessionAuthority.matches(id)) RiderSessionAuthority.clear()
         if (!active && authenticatedRiderId == id) authenticatedRiderId = null
         store.saveRiders(riders)
     }
 
     private fun riderSessionDecision(riderId: String): RiderEligibilityDecision {
-        if (!riderActorMatchesAuthenticatedSession(authenticatedRiderId, riderId)) {
+        if (!RiderSessionAuthority.matches(riderId)) {
             return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
         }
         val target = rider(riderId) ?: return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
-        if (!hasRiderCredential(riderId)) return RiderEligibilityDecision.denied(RiderDenialReason.SESSION_REQUIRED)
         if (!target.active) {
-            if (authenticatedRiderId == target.id) authenticatedRiderId = null
+            RiderSessionAuthority.clear()
             return RiderEligibilityDecision.denied(RiderDenialReason.ACCOUNT_DEACTIVATED)
         }
         return RiderEligibilityDecision.ALLOWED
@@ -1850,96 +1850,33 @@ class MandadosController(context: Context) {
         return id
     }
 
+    /** Legacy local Rider credentials are retained only as inert Alpha data. */
     fun hasRiderCredential(riderId: String): Boolean =
         riderCredentials.any { it.riderId == riderId }
 
-    fun createRiderInvitation(riderId: String, resetAccess: Boolean = false): RiderInvitation? {
-        val rider = rider(riderId) ?: return null
-        if (rider.phone.isBlank()) return null
-        val now = LocalDateTime.now()
-        riderInvitations = riderInvitations.map {
-            if (it.riderId == riderId && it.status == RiderInvitationStatus.PENDING)
-                it.copy(status = RiderInvitationStatus.CANCELLED)
-            else it
-        }
-        if (resetAccess) {
-            riderCredentials = riderCredentials.filterNot { it.riderId == riderId }
-            if (authenticatedRiderId == riderId) authenticatedRiderId = null
-            store.saveRiderCredentials(riderCredentials)
-        }
-        val invitation = RiderInvitation(
-            id = "INV-" + System.currentTimeMillis(),
-            code = newInvitationCode(),
-            riderId = riderId,
-            phone = rider.phone,
-            createdAt = now.format(timestampFormat),
-            expiresAt = now.plusDays(7).format(timestampFormat),
-            resetAccess = resetAccess
-        )
-        riderInvitations = riderInvitations + invitation
-        store.saveRiderInvitations(riderInvitations)
-        return invitation
-    }
+    /** P23-A2 removes local invitation generation as an authority path. */
+    fun createRiderInvitation(riderId: String, resetAccess: Boolean = false): RiderInvitation? = null
 
+    /** P23-A2 capabilities are redeemed only through the backend/Firebase coordinator. */
     fun redeemRiderInvitation(code: String, password: String): String? {
         authenticatedRiderId = null
-        if (!passwordIsStrong(password)) return null
-        val normalized = code.trim().uppercase()
-        val invitation = riderInvitations.firstOrNull {
-            it.code.equals(normalized, ignoreCase = true) && it.status == RiderInvitationStatus.PENDING
-        } ?: return null
-        val expires = parseTimestamp(invitation.expiresAt) ?: return null
-        if (LocalDateTime.now().isAfter(expires)) {
-            riderInvitations = riderInvitations.map {
-                if (it.id == invitation.id) it.copy(status = RiderInvitationStatus.EXPIRED) else it
-            }
-            store.saveRiderInvitations(riderInvitations)
-            return null
-        }
-        val target = rider(invitation.riderId) ?: return null
-        if (!target.active) return null
-        val credential = buildRiderCredential(invitation.riderId, password)
-        riderCredentials = riderCredentials.filterNot { it.riderId == invitation.riderId } + credential
-        riderInvitations = riderInvitations.map {
-            if (it.id == invitation.id) it.copy(status = RiderInvitationStatus.USED, usedAt = nowText()) else it
-        }
-        store.saveRiderCredentials(riderCredentials)
-        store.saveRiderInvitations(riderInvitations)
-        authenticatedRiderId = invitation.riderId
-        return invitation.riderId
+        RiderSessionAuthority.clear()
+        return null
     }
 
+    /** P23-A2 forbids local password hashes from authenticating a Rider. */
     fun authenticateRiderResult(riderId: String, password: String): RiderAuthenticationResult {
         authenticatedRiderId = null
         riderDenialFeedback = null
-        val normalizedId = riderId.trim()
-        val target = riders.firstOrNull { it.id.equals(normalizedId, ignoreCase = true) }
-            ?: return RiderAuthenticationResult(RiderAuthenticationStatus.INVALID_CREDENTIALS)
-        val credential = riderCredentials.firstOrNull { it.riderId.equals(target.id, ignoreCase = true) }
-            ?: return RiderAuthenticationResult(RiderAuthenticationStatus.INVALID_CREDENTIALS)
-        if (!verifyRiderPassword(password, credential)) {
-            return RiderAuthenticationResult(RiderAuthenticationStatus.INVALID_CREDENTIALS)
-        }
-        if (!target.active) {
-            return RiderAuthenticationResult(
-                status = RiderAuthenticationStatus.DEACTIVATED,
-                riderId = target.id,
-                riderName = target.name
-            )
-        }
-        authenticatedRiderId = target.id
-        return RiderAuthenticationResult(
-            status = RiderAuthenticationStatus.AUTHENTICATED,
-            riderId = target.id,
-            riderName = target.name
-        )
+        RiderSessionAuthority.clear()
+        return RiderAuthenticationResult(RiderAuthenticationStatus.INVALID_CREDENTIALS)
     }
 
-    fun authenticateRider(riderId: String, password: String): Boolean =
-        authenticateRiderResult(riderId, password).status == RiderAuthenticationStatus.AUTHENTICATED
+    fun authenticateRider(riderId: String, password: String): Boolean = false
 
     fun logoutRider() {
         authenticatedRiderId = null
+        RiderSessionAuthority.clear()
         riderDenialFeedback = null
     }
 
@@ -1947,31 +1884,19 @@ class MandadosController(context: Context) {
         authenticatedRiderFor(riderId) != null
 
     private fun authenticatedRiderFor(riderId: String): RiderProfile? {
-        if (!riderActorMatchesAuthenticatedSession(authenticatedRiderId, riderId)) return null
+        if (!RiderSessionAuthority.matches(riderId)) return null
         val target = rider(riderId) ?: return null
-        if (!hasRiderCredential(riderId)) return null
         if (!target.active) {
-            if (authenticatedRiderId == target.id) authenticatedRiderId = null
+            RiderSessionAuthority.clear()
             return null
         }
         return target
     }
 
-    fun changeRiderPassword(riderId: String, currentPassword: String, newPassword: String): Boolean {
-        if (authenticatedRiderFor(riderId) == null || !passwordIsStrong(newPassword)) return false
-        val currentCredential = riderCredentials.firstOrNull { it.riderId == riderId } ?: return false
-        if (!verifyRiderPassword(currentPassword, currentCredential)) return false
-        val credential = buildRiderCredential(riderId, newPassword)
-        riderCredentials = riderCredentials.filterNot { it.riderId == riderId } + credential
-        store.saveRiderCredentials(riderCredentials)
-        return true
-    }
+    /** Password changes are handled by Firebase Rider after exact backend session revalidation. */
+    fun changeRiderPassword(riderId: String, currentPassword: String, newPassword: String): Boolean = false
 
-    fun passwordIsStrong(password: String): Boolean =
-        password.length >= 8 &&
-            password.any(Char::isUpperCase) &&
-            password.any(Char::isLowerCase) &&
-            password.any(Char::isDigit)
+    fun passwordIsStrong(password: String): Boolean = riderPasswordIsValid(password)
 
     private fun buildRiderCredential(riderId: String, password: String): RiderCredential {
         val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }

@@ -135,9 +135,12 @@ class TipTransferPolicyTest {
     }
 
     @Test fun `REG-PAY-TIP-016 authenticated Rider identity must match claimed actor`() {
-        assertTrue(riderActorMatchesAuthenticatedSession("RID-A", "RID-A"))
-        assertFalse(riderActorMatchesAuthenticatedSession(null, "RID-A"))
-        assertFalse(riderActorMatchesAuthenticatedSession("RID-B", "RID-A"))
+        clearRiderSessionForTest()
+        authorizeRiderForTest("RID-A")
+        assertTrue(riderActorMatchesAuthenticatedSession(null, "RID-A"))
+        assertFalse(riderActorMatchesAuthenticatedSession("RID-A", "RID-B"))
+        clearRiderSessionForTest()
+        assertFalse(riderActorMatchesAuthenticatedSession("RID-A", "RID-A"))
     }
 
     @Test fun `REG-PAY-TIP-015 balance source includes only confirmed transfer tips`() {

@@ -27,6 +27,7 @@ class OrderPaymentMutationIntegrityTest {
     fun setUp() {
         context = RuntimeEnvironment.getApplication()
         context.getSharedPreferences("mandados_alpha1", Context.MODE_PRIVATE).edit().clear().commit()
+        clearRiderSessionForTest()
     }
 
     @Test
@@ -161,7 +162,7 @@ class OrderPaymentMutationIntegrityTest {
             shifts = listOf(shift)
         )
         val c = MandadosController(context)
-        assertTrue(c.authenticateRider(rider.id, "RiderA123"))
+        authorizeRiderForTest(rider.id)
         assertTrue(c.reserveShift(rider.id, shift.id))
         assertTrue(c.setRiderAvailable(rider.id, true))
 

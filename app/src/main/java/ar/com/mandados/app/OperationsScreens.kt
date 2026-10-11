@@ -40,6 +40,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val fullTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
 private val oldTimeFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
@@ -453,10 +454,13 @@ internal fun AdminReportsScreen(c: MandadosController, onBack: () -> Unit) {
 @Composable
 internal fun RidersAdminScreenV2(c: MandadosController, onBack: () -> Unit, onWorkspace: (String) -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val capabilityService = remember(context.applicationContext) { RiderAdminCapabilityService(context.applicationContext) }
     var editingId by rememberSaveable { mutableStateOf<String?>(null) }
     var editOpen by rememberSaveable { mutableStateOf(false) }
     var docsId by rememberSaveable { mutableStateOf<String?>(null) }
     var accessRiderId by rememberSaveable { mutableStateOf<String?>(null) }
+    var capabilityBusyRiderId by remember { mutableStateOf<String?>(null) }
 
     OpsPage("Gestión de Repartidores", onBack) {
         Button(onClick = { editingId = null; editOpen = true }, modifier = Modifier.fillMaxWidth()) {
@@ -499,13 +503,13 @@ internal fun RidersAdminScreenV2(c: MandadosController, onBack: () -> Unit, onWo
                     }
                     OutlinedButton(
                         onClick = { accessRiderId = rider.id },
-                        enabled = rider.phone.isNotBlank(),
+                        enabled = rider.phone.isNotBlank() && capabilityBusyRiderId == null,
                         modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
                     ) {
-                        Text(if (c.hasRiderCredential(rider.id)) "RESETEAR ACCESO Y ENVIAR CÓDIGO" else "ENVIAR INVITACIÓN POR WHATSAPP")
+                        Text(if (capabilityBusyRiderId == rider.id) "GENERANDO…" else "GENERAR CÓDIGO DE ACCESO")
                     }
                     Text(
-                        "Administración sólo gestiona códigos de invitación/reset. La contraseña nunca se muestra ni se almacena en texto plano.",
+                        "El código lo emite el backend como capability de un solo uso. La contraseña nunca se muestra ni se guarda en Punto25.",
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(top = 4.dp)
                     )
@@ -521,33 +525,34 @@ internal fun RidersAdminScreenV2(c: MandadosController, onBack: () -> Unit, onWo
 
     accessRiderId?.let { riderId ->
         c.rider(riderId)?.let { rider ->
-            val reset = c.hasRiderCredential(rider.id)
             Punto25AlertDialog(
                 onDismissRequest = { accessRiderId = null },
-                title = { Text(if (reset) "Resetear acceso" else "Enviar invitación") },
+                title = { Text("Generar código de acceso") },
                 text = {
-                    Text(
-                        if (reset)
-                            "Se invalidará la contraseña actual y se generará un nuevo código de un solo uso. El Repartidor no podrá volver a ingresar hasta crear una contraseña nueva."
-                        else
-                            "Se generará un código de un solo uso, válido por 7 días, y se abrirá WhatsApp para enviárselo al Repartidor."
-                    )
+                    Text("Punto25 consultará el estado backend del Repartidor y emitirá una invitación inicial o una capability de recuperación, según corresponda. El código es de un solo uso y su vencimiento lo determina el backend.")
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        val invitation = c.createRiderInvitation(rider.id, resetAccess = reset)
-                        if (invitation != null) {
-                            val verb = if (reset) "restablecer" else "crear"
-                            val message = "Hola " + rider.name.substringBefore(" ") +
-                                ". Te enviamos tu código de Punto25 para " + verb +
-                                " el acceso de Repartidor: " + invitation.code +
-                                ". Vence en 7 días. Abrí Punto25, elegí Soy Repartidor y seguí los pasos. No compartas tu contraseña con nadie."
-                            openWhatsAppTo(context, rider.phone, message)
-                        } else {
-                            Toast.makeText(context, "Configurá primero el WhatsApp del Repartidor.", Toast.LENGTH_LONG).show()
-                        }
                         accessRiderId = null
-                    }) { Text(if (reset) "RESETEAR Y ENVIAR" else "GENERAR Y ENVIAR") }
+                        capabilityBusyRiderId = rider.id
+                        scope.launch {
+                            capabilityService.createForCurrentState(rider.id)
+                                .onSuccess { capability ->
+                                    val action = if (capability.kind == RiderCapabilityKind.RECOVERY) "recuperar" else "crear"
+                                    val expiry = riderCapabilityExpiryText(capability.expiresAt)
+                                    val expiryText = expiry?.let { " Vence el $it." }.orEmpty()
+                                    val message = "Hola " + rider.name.substringBefore(" ") +
+                                        ". Te enviamos tu código de Punto25 para " + action +
+                                        " el acceso de Repartidor: " + capability.capability + "." + expiryText +
+                                        " Abrí Punto25, elegí Soy Repartidor y seguí los pasos. No compartas tu contraseña con nadie."
+                                    openWhatsAppTo(context, rider.phone, message)
+                                }
+                                .onFailure {
+                                    Toast.makeText(context, "No se pudo generar el código de acceso. Intentá nuevamente.", Toast.LENGTH_LONG).show()
+                                }
+                            capabilityBusyRiderId = null
+                        }
+                    }) { Text("GENERAR Y ENVIAR") }
                 },
                 dismissButton = { TextButton(onClick = { accessRiderId = null }) { Text("CANCELAR") } }
             )
@@ -1373,8 +1378,12 @@ private fun RiderProfileView(
     onEdit: (RiderProfileEditSnapshot) -> Unit,
     onSection: (RiderSection) -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val coordinator = remember(context.applicationContext) { createRiderCoordinator(context.applicationContext) }
     var aliasMessage by remember(rider.id) { mutableStateOf("") }
     var passwordMessage by remember(rider.id) { mutableStateOf("") }
+    var passwordBusy by remember(rider.id) { mutableStateOf(false) }
 
     Text(rider.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
     Text(rider.id)
@@ -1417,50 +1426,73 @@ private fun RiderProfileView(
     OutlinedTextField(
         edit.currentPassword,
         {
-            onEdit(edit.copy(currentPassword = it))
+            onEdit(edit.copy(currentPassword = it.take(RIDER_PASSWORD_MAX_LENGTH)))
             passwordMessage = ""
         },
         label = { Text("Contraseña actual") },
         visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
         singleLine = true,
+        enabled = !passwordBusy,
         modifier = Modifier.fillMaxWidth()
     )
     OutlinedTextField(
         edit.newPassword,
         {
-            onEdit(edit.copy(newPassword = it))
+            onEdit(edit.copy(newPassword = it.take(RIDER_PASSWORD_MAX_LENGTH)))
             passwordMessage = ""
         },
         label = { Text("Nueva contraseña") },
         visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
         singleLine = true,
+        enabled = !passwordBusy,
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
     )
     OutlinedTextField(
         edit.confirmPassword,
         {
-            onEdit(edit.copy(confirmPassword = it))
+            onEdit(edit.copy(confirmPassword = it.take(RIDER_PASSWORD_MAX_LENGTH)))
             passwordMessage = ""
         },
         label = { Text("Repetir nueva contraseña") },
         visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
         singleLine = true,
+        enabled = !passwordBusy,
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+    )
+    Text(
+        "La nueva contraseña debe tener entre 15 y 4096 caracteres; no se exige composición específica.",
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(top = 4.dp)
     )
     Button(
         onClick = {
             passwordMessage = when {
+                edit.currentPassword.isEmpty() -> "Ingresá tu contraseña actual."
                 edit.newPassword != edit.confirmPassword -> "Las nuevas contraseñas no coinciden."
-                !c.passwordIsStrong(edit.newPassword) -> "Usá al menos 8 caracteres, con mayúscula, minúscula y número."
-                c.changeRiderPassword(rider.id, edit.currentPassword, edit.newPassword) -> {
+                !riderPasswordIsValid(edit.newPassword) -> "La nueva contraseña debe tener entre 15 y 4096 caracteres."
+                else -> ""
+            }
+            if (passwordMessage.isNotEmpty()) return@Button
+            val currentSession = c.currentRiderSession()
+            if (currentSession == null || !currentSession.riderCode.equals(rider.id, ignoreCase = true)) {
+                passwordMessage = "No pudimos validar tu sesión. Volvé a iniciar sesión."
+                return@Button
+            }
+            passwordBusy = true
+            scope.launch {
+                val changed = coordinator.changePassword(currentSession, edit.currentPassword, edit.newPassword)
+                if (changed) {
                     onEdit(edit.copy(currentPassword = "", newPassword = "", confirmPassword = ""))
-                    "Contraseña actualizada."
+                    passwordMessage = "Contraseña actualizada."
+                } else {
+                    passwordMessage = "No se pudo actualizar la contraseña. Revisá la contraseña actual e intentá nuevamente."
                 }
-                else -> "La contraseña actual no es correcta."
+                passwordBusy = false
             }
         },
+        enabled = !passwordBusy,
         modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
-    ) { Text("CAMBIAR CONTRASEÑA") }
+    ) { Text(if (passwordBusy) "ACTUALIZANDO…" else "CAMBIAR CONTRASEÑA") }
     if (passwordMessage.isNotBlank()) {
         Text(
             passwordMessage,
