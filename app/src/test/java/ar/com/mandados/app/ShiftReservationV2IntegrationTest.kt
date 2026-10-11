@@ -28,6 +28,7 @@ class ShiftReservationV2IntegrationTest {
     fun setUp() {
         context = RuntimeEnvironment.getApplication()
         context.getSharedPreferences("mandados_alpha1", Context.MODE_PRIVATE).edit().clear().commit()
+        clearRiderSessionForTest()
     }
 
     @Test
@@ -70,7 +71,7 @@ class ShiftReservationV2IntegrationTest {
         )
         seed(listOf(rider), listOf(shift), listOf(cancelled), credentials = mapOf(rider.id to password))
         val c = MandadosController(context)
-        assertTrue(c.authenticateRider(rider.id, password))
+        authorizeRiderForTest(rider.id)
 
         val decision = c.reserveShiftWithDecision(rider.id, shift.id)
 
@@ -97,7 +98,7 @@ class ShiftReservationV2IntegrationTest {
         )
         seed(listOf(rider), listOf(shift), listOf(oldCancellation), credentials = mapOf(rider.id to password))
         val c = MandadosController(context)
-        assertTrue(c.authenticateRider(rider.id, password))
+        authorizeRiderForTest(rider.id)
 
         assertTrue(c.reserveShift(rider.id, shift.id))
         assertTrue(c.cancelConcreteShift(oldCancellation.id))
@@ -126,7 +127,7 @@ class ShiftReservationV2IntegrationTest {
         )
         seed(listOf(rider), listOf(shift), listOf(reservation), credentials = mapOf(rider.id to password))
         val c = MandadosController(context)
-        assertTrue(c.authenticateRider(rider.id, password))
+        authorizeRiderForTest(rider.id)
         assertTrue(c.riderHasActiveShiftNow(rider.id))
         assertTrue(c.rider(rider.id)!!.available)
 
