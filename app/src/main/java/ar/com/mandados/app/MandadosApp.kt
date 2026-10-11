@@ -150,12 +150,11 @@ private fun MandadosNavigation(controller: MandadosController) {
         (!adminSession.authorized || !AdminGoogleAuthIntegration.hasCurrentUser(context))
 
     fun logoutRider(target: Screen) {
-        val session = controller.currentRiderSession()
-        controller.clearAuthenticatedRiderSession()
+        val revocation = controller.beginAuthenticatedRiderLogout(riderCoordinator)
         selectedRiderId = null
         riderAccessMessage = ""
         screen = target
-        riderScope.launch { riderCoordinator.logout(session) }
+        riderScope.launch { riderCoordinator.finishLogout(revocation) }
     }
 
     LaunchedEffect(Unit) {

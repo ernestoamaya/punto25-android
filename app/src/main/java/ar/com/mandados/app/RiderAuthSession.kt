@@ -31,27 +31,65 @@ internal data class RiderSessionContext(
 }
 
 internal object RiderSessionAuthority {
+    private val stateLock = Any()
+
     @Volatile
     private var current: RiderSessionContext? = null
+    private var logoutFence: Long = 0L
 
     fun install(context: RiderSessionContext) {
-        current = context.takeIf { it.isStructurallyValid() }
+        synchronized(stateLock) {
+            current = context.takeIf { it.isStructurallyValid() }
+        }
     }
 
-    fun snapshot(nowMillis: Long = System.currentTimeMillis()): RiderSessionContext? {
-        val candidate = current
-        if (candidate == null || !candidate.isStructurallyValid(nowMillis)) {
-            current = null
-            return null
+    fun snapshot(nowMillis: Long = System.currentTimeMillis()): RiderSessionContext? =
+        synchronized(stateLock) {
+            val candidate = current
+            if (candidate == null || !candidate.isStructurallyValid(nowMillis)) {
+                current = null
+                null
+            } else {
+                candidate
+            }
         }
-        return candidate
-    }
 
     fun matches(riderCode: String, nowMillis: Long = System.currentTimeMillis()): Boolean =
         snapshot(nowMillis)?.riderCode?.equals(riderCode, ignoreCase = true) == true
 
+    fun captureInstallFence(): Long = synchronized(stateLock) { logoutFence }
+
+    /**
+     * Invalidates every asynchronous install attempt that captured an earlier fence and clears
+     * process authority atomically with the generation change.
+     */
+    fun establishLogoutFence() {
+        synchronized(stateLock) {
+            logoutFence += 1L
+            current = null
+        }
+    }
+
+    /**
+     * Cache persistence and process-authority installation share the same lock as the logout
+     * fence. Therefore logout either happens after this complete install and clears it, or wins
+     * first and prevents both persistence and authority installation by the stale operation.
+     */
+    fun installIfFenceUnchanged(
+        context: RiderSessionContext,
+        expectedFence: Long,
+        persist: () -> Unit
+    ): Boolean = synchronized(stateLock) {
+        if (logoutFence != expectedFence || !context.isStructurallyValid()) return@synchronized false
+        persist()
+        current = context
+        true
+    }
+
     fun clear() {
-        current = null
+        synchronized(stateLock) {
+            current = null
+        }
     }
 }
 
@@ -263,12 +301,19 @@ internal class RiderAuthSessionCoordinator(
     }
 
     suspend fun restore(): RiderAuthOutcome {
+        val installFence = RiderSessionAuthority.captureInstallFence()
         val hint = cache.load()
             ?: return rejectAndInvalidate("Volvé a iniciar sesión para continuar.")
-        return revalidate(hint)
+        return revalidate(hint, installFence)
     }
 
-    suspend fun revalidate(session: RiderSessionContext?): RiderAuthOutcome = guarded {
+    suspend fun revalidate(session: RiderSessionContext?): RiderAuthOutcome =
+        revalidate(session, RiderSessionAuthority.captureInstallFence())
+
+    private suspend fun revalidate(
+        session: RiderSessionContext?,
+        installFence: Long
+    ): RiderAuthOutcome = guarded {
         requireConfigured()
         val hint = session ?: return@guarded rejectAndInvalidate()
         if (!hint.isStructurallyValid() || !firebase.hasCurrentUser()) return@guarded rejectAndInvalidate()
@@ -282,19 +327,21 @@ internal class RiderAuthSessionCoordinator(
         ) {
             return@guarded rejectAndInvalidate()
         }
-        installVerified(verified)
+        if (!installVerified(verified, installFence)) {
+            return@guarded rejected("Volvé a iniciar sesión para continuar.")
+        }
         RiderAuthOutcome.Authorized(verified)
     }
 
     /**
-     * Synchronous logout boundary. Persisted restore state is removed first, then process
-     * authority and Firebase Rider are invalidated. No token retrieval or network work occurs
-     * here, so callers can execute this before launching any coroutine.
+     * Synchronous logout boundary. A generation fence is established first, then persisted
+     * restore state, process authority and Firebase Rider are invalidated. No token retrieval or
+     * network work occurs here, so callers can execute this before launching any coroutine.
      */
     fun beginLogout(session: RiderSessionContext?): RiderLogoutRevocation {
-        val candidate = session ?: RiderSessionAuthority.snapshot()
+        val candidate = session ?: RiderSessionAuthority.snapshot() ?: cache.load()
+        RiderSessionAuthority.establishLogoutFence()
         runCatching { cache.clear() }
-        RiderSessionAuthority.clear()
         val tokenProvider: suspend () -> String? = try {
             firebase.invalidateForLogout()
         } catch (_: Exception) {
@@ -373,6 +420,11 @@ internal class RiderAuthSessionCoordinator(
         cache.save(session)
         RiderSessionAuthority.install(session)
     }
+
+    private fun installVerified(session: RiderSessionContext, installFence: Long): Boolean =
+        RiderSessionAuthority.installIfFenceUnchanged(session, installFence) {
+            cache.save(session)
+        }
 
     private fun invalidateLocalState() {
         runCatching { cache.clear() }

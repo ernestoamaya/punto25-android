@@ -20,12 +20,25 @@ internal fun MandadosController.applyAuthenticatedRiderSession(session: RiderSes
 internal fun MandadosController.currentRiderSession(): RiderSessionContext? =
     RiderSessionAuthority.snapshot()
 
+/**
+ * Real Rider logout/Back boundary. Local cache, in-memory authority and Firebase Rider are
+ * invalidated synchronously by [RiderAuthSessionCoordinator.beginLogout] before controller
+ * navigation cleanup and before callers are allowed to launch best-effort remote revocation.
+ */
+internal fun MandadosController.beginAuthenticatedRiderLogout(
+    coordinator: RiderAuthSessionCoordinator
+): RiderLogoutRevocation {
+    val session = currentRiderSession()
+    val revocation = coordinator.beginLogout(session)
+    clearAuthenticatedRiderSession()
+    return revocation
+}
+
 internal fun MandadosController.clearAuthenticatedRiderSession() {
-    // The live UI invokes this synchronously before scheduling remote logout work. When an
-    // authenticated Rider authority exists, remove the durable restore hint and Firebase
-    // current-user state now; the coordinator retains only a one-shot token provider for the
-    // later best-effort backend DELETE. On process recreation there is no in-memory authority,
-    // so startup restore remains allowed to validate an existing cache hint against backend.
+    // Compatibility cleanup for non-logout paths. The real Rider logout/Back path above already
+    // performs the coordinator boundary first. Keeping this conditional preserves startup restore:
+    // process recreation legitimately has no in-memory authority while cache + Firebase remain only
+    // a hint that still must be revalidated against backend.
     if (RiderSessionAuthority.snapshot() != null) {
         RiderFirebaseAuthIntegration.invalidateBoundLocalLogoutState()
     }
