@@ -55,9 +55,10 @@ internal fun RiderBackendAccessScreen(
             message = ""
             onSuccess(outcome.session.riderCode)
         } else {
+            val revocation = coordinator.beginLogout(outcome.session)
             c.clearAuthenticatedRiderSession()
             message = "No pudimos validar tu acceso. Intentá nuevamente."
-            scope.launch { coordinator.logout(outcome.session) }
+            scope.launch { coordinator.finishLogout(revocation) }
         }
     }
 
