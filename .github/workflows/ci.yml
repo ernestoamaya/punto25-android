@@ -3,10 +3,6 @@ name: Android CI
 on:
   pull_request:
     branches: [ "main" ]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE"
-      - ".github/CODEOWNERS"
   push:
     branches: [ "main" ]
     paths-ignore:
@@ -30,22 +26,107 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Classify PR changes
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+
+          classify_paths() {
+            local file_list="$1"
+            local saw_change=false
+            local path
+
+            while IFS= read -r path; do
+              [[ -z "$path" ]] && continue
+              saw_change=true
+              case "$path" in
+                *.md|LICENSE|.github/CODEOWNERS)
+                  ;;
+                *)
+                  return 1
+                  ;;
+              esac
+            done < "$file_list"
+
+            [[ "$saw_change" == "true" ]]
+          }
+
+          docs_only_fixture="$RUNNER_TEMP/docs-only-paths.txt"
+          mixed_fixture="$RUNNER_TEMP/mixed-paths.txt"
+          empty_fixture="$RUNNER_TEMP/empty-paths.txt"
+
+          printf '%s\n' README.md docs/PENDING_MASTER.md LICENSE .github/CODEOWNERS > "$docs_only_fixture"
+          printf '%s\n' README.md .github/workflows/ci.yml > "$mixed_fixture"
+          : > "$empty_fixture"
+
+          if ! classify_paths "$docs_only_fixture"; then
+            echo "::error::Classifier regression: documentation-only fixture must be lightweight."
+            exit 1
+          fi
+          if classify_paths "$mixed_fixture"; then
+            echo "::error::Classifier regression: mixed fixture must use heavy CI."
+            exit 1
+          fi
+          if classify_paths "$empty_fixture"; then
+            echo "::error::Classifier regression: empty/ambiguous fixture must use heavy CI."
+            exit 1
+          fi
+
+          run_heavy=true
+          reason="non-PR event defaults to heavy CI"
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ -z "${BASE_SHA:-}" || -z "${HEAD_SHA:-}" ]]; then
+              reason="missing PR base/head SHA; fail closed to heavy CI"
+            else
+              changed_paths="$RUNNER_TEMP/changed-paths.txt"
+              if git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA" \
+                && git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_paths"; then
+                if classify_paths "$changed_paths"; then
+                  run_heavy=false
+                  reason="unequivocally documentation-only PR"
+                else
+                  reason="mixed, non-documentation, or empty PR diff; heavy CI required"
+                fi
+              else
+                reason="PR diff classification failed; fail closed to heavy CI"
+              fi
+            fi
+          fi
+
+          echo "run_heavy=$run_heavy" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "run_heavy=$run_heavy ($reason)"
+
       - name: Java 17
+        if: steps.classify.outputs.run_heavy == 'true'
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Android SDK
+        if: steps.classify.outputs.run_heavy == 'true'
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           packages: 'platform-tools platforms;android-37.0 build-tools;36.0.0'
 
       - name: Gradle 9.3.1
+        if: steps.classify.outputs.run_heavy == 'true'
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           gradle-version: '9.3.1'
           cache-provider: basic
 
       - name: Unit tests and debug build
+        if: steps.classify.outputs.run_heavy == 'true'
         run: gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Documentation-only required check
+        if: steps.classify.outputs.run_heavy == 'false'
+        run: echo "Documentation-only PR classified safely; heavy Android CI skipped."
