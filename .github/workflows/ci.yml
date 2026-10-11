@@ -3,6 +3,10 @@ name: Android CI
 on:
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+      - ".github/CODEOWNERS"
   push:
     branches: [ "main" ]
     paths-ignore:
