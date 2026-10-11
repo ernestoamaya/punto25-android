@@ -330,6 +330,12 @@ class RiderEligibilityAndSessionIntegrationTest {
         customerPhone = "2345555000",
         customerId = "C-1",
         detail = "Pedido",
+        baseAmount = 1000,
+        baseZoneName = "TEST",
+        prePickupAmount = 0,
+        rainAmount = 0,
+        totalAmount = 1000,
+        whatsappMessage = "",
         assignedRiderId = riderId,
         deliveryPayment = DeliveryPaymentMethod.CASH,
         events = emptyList()
