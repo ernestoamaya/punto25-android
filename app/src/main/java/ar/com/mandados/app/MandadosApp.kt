@@ -1014,7 +1014,7 @@ private fun DeliveryForm(
         Spacer(Modifier.height(16.dp))
         Text("Entrega", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Field("Dirección (opcional si marcás el pin)", d.destinationAddress) { c.draft = c.draft.copy(destinationAddress = it) }
-        Field("Referencia de entrega", d.destinationReference) { c.draft = c.draft.copy(destinationReference = it) }
+        Field("Referencia (opcional)", d.destinationReference) { c.draft = c.draft.copy(destinationReference = it) }
         if (autoZones) {
             AutomaticZoneField(c, d.destinationLocation, "Zona de entrega")
         } else {
