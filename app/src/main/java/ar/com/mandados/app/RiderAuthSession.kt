@@ -201,6 +201,11 @@ internal sealed class RiderAuthOutcome {
     data class Rejected(val recoverableMessage: String) : RiderAuthOutcome()
 }
 
+internal data class RiderLogoutRevocation(
+    val sessionId: String?,
+    val tokenProvider: suspend () -> String?
+)
+
 internal class RiderAuthSessionCoordinator(
     private val firebase: RiderFirebaseGateway,
     private val backend: RiderBackendGateway,
@@ -258,7 +263,8 @@ internal class RiderAuthSessionCoordinator(
     }
 
     suspend fun restore(): RiderAuthOutcome {
-        val hint = cache.load() ?: return rejected("Volvé a iniciar sesión para continuar.")
+        val hint = cache.load()
+            ?: return rejectAndInvalidate("Volvé a iniciar sesión para continuar.")
         return revalidate(hint)
     }
 
@@ -280,26 +286,35 @@ internal class RiderAuthSessionCoordinator(
         RiderAuthOutcome.Authorized(verified)
     }
 
-    suspend fun logout(session: RiderSessionContext?) {
+    /**
+     * Synchronous logout boundary. Persisted restore state is removed first, then process
+     * authority and Firebase Rider are invalidated. No token retrieval or network work occurs
+     * here, so callers can execute this before launching any coroutine.
+     */
+    fun beginLogout(session: RiderSessionContext?): RiderLogoutRevocation {
         val candidate = session ?: RiderSessionAuthority.snapshot()
-
-        // All local authorities are invalidated synchronously before the first possible
-        // suspension/token/network operation. The cache clear is a synchronous commit.
-        val revocationTokenProvider = try {
-            RiderSessionAuthority.clear()
-            cache.clear()
-            firebase.invalidateForLogout()
-        } catch (_: Exception) {
-            RiderSessionAuthority.clear()
-            runCatching { cache.clear() }
+        runCatching { cache.clear() }
+        RiderSessionAuthority.clear()
+        val tokenProvider = runCatching { firebase.invalidateForLogout() }.getOrElse {
             runCatching { firebase.signOut() }
-            return
+            { null }
         }
+        return RiderLogoutRevocation(
+            sessionId = candidate?.sessionId?.takeIf { it.isNotBlank() },
+            tokenProvider = tokenProvider
+        )
+    }
 
-        if (candidate != null && candidate.sessionId.isNotBlank() && backend.isConfigured()) {
-            val token = runCatching { revocationTokenProvider() }.getOrNull().orEmpty()
-            if (token.isNotBlank()) runCatching { backend.deleteSession(token, candidate.sessionId) }
-        }
+    /** Best-effort remote revocation, safe to schedule only after [beginLogout] returned. */
+    suspend fun finishLogout(revocation: RiderLogoutRevocation) {
+        val sessionId = revocation.sessionId ?: return
+        if (!backend.isConfigured()) return
+        val token = runCatching { revocation.tokenProvider() }.getOrNull().orEmpty()
+        if (token.isNotBlank()) runCatching { backend.deleteSession(token, sessionId) }
+    }
+
+    suspend fun logout(session: RiderSessionContext?) {
+        finishLogout(beginLogout(session))
     }
 
     suspend fun changePassword(
@@ -357,9 +372,9 @@ internal class RiderAuthSessionCoordinator(
     }
 
     private fun invalidateLocalState() {
+        runCatching { cache.clear() }
         RiderSessionAuthority.clear()
-        cache.clear()
-        firebase.signOut()
+        runCatching { firebase.signOut() }
     }
 
     private fun rejectAndInvalidate(
