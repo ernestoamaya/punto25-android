@@ -21,6 +21,14 @@ internal fun MandadosController.currentRiderSession(): RiderSessionContext? =
     RiderSessionAuthority.snapshot()
 
 internal fun MandadosController.clearAuthenticatedRiderSession() {
+    // The live UI invokes this synchronously before scheduling remote logout work. When an
+    // authenticated Rider authority exists, remove the durable restore hint and Firebase
+    // current-user state now; the coordinator retains only a one-shot token provider for the
+    // later best-effort backend DELETE. On process recreation there is no in-memory authority,
+    // so startup restore remains allowed to validate an existing cache hint against backend.
+    if (RiderSessionAuthority.snapshot() != null) {
+        RiderFirebaseAuthIntegration.invalidateBoundLocalLogoutState()
+    }
     RiderSessionAuthority.clear()
     logoutRider()
 }
