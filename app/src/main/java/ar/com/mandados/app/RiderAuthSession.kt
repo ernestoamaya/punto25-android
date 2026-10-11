@@ -295,9 +295,12 @@ internal class RiderAuthSessionCoordinator(
         val candidate = session ?: RiderSessionAuthority.snapshot()
         runCatching { cache.clear() }
         RiderSessionAuthority.clear()
-        val tokenProvider = runCatching { firebase.invalidateForLogout() }.getOrElse {
+        val tokenProvider: suspend () -> String? = try {
+            firebase.invalidateForLogout()
+        } catch (_: Exception) {
             runCatching { firebase.signOut() }
-            { null }
+            val emptyProvider: suspend () -> String? = { null }
+            emptyProvider
         }
         return RiderLogoutRevocation(
             sessionId = candidate?.sessionId?.takeIf { it.isNotBlank() },
