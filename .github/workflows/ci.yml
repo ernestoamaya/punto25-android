@@ -35,7 +35,7 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EVENT_SHA: ${{ github.sha }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
           classify_paths() {
             local file_list="$1"
