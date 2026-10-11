@@ -80,7 +80,20 @@ internal data class RiderAuthAttemptKeys(
     val recoveryPrepare: String = newIdempotencyKey(),
     val complete: String = newIdempotencyKey(),
     val session: String = newIdempotencyKey()
-)
+) {
+    private var preparedCapability: String? = null
+    private var preparedResult: RiderCapabilityPreparation? = null
+
+    @Synchronized
+    fun preparationFor(capability: String): RiderCapabilityPreparation? =
+        preparedResult?.takeIf { preparedCapability == capability }
+
+    @Synchronized
+    fun rememberPreparation(capability: String, preparation: RiderCapabilityPreparation) {
+        preparedCapability = capability
+        preparedResult = preparation
+    }
+}
 
 internal data class RiderLoginAttemptKeys(
     val session: String = newIdempotencyKey()
@@ -106,6 +119,16 @@ internal interface RiderFirebaseGateway {
     suspend fun idToken(forceRefresh: Boolean = false): String?
     suspend fun reauthenticateAndUpdatePassword(currentPassword: String, newPassword: String)
     fun signOut()
+
+    /**
+     * Invalidates the local Firebase Rider session synchronously and returns a best-effort
+     * token provider backed by the user reference captured before sign-out. The returned
+     * provider is only for backend logout revocation after all local Rider authority is gone.
+     */
+    fun invalidateForLogout(): suspend () -> String? {
+        signOut()
+        return { null }
+    }
 }
 
 internal interface RiderBackendGateway {
@@ -159,7 +182,9 @@ internal class AndroidRiderSessionCache(context: Context) : RiderSessionCache {
     }
 
     override fun clear() {
-        prefs.edit().clear().apply()
+        // Logout/invalid-session paths require the persisted restore hint to be gone
+        // before any coroutine suspension or network work can begin.
+        prefs.edit().clear().commit()
     }
 
     private companion object {
@@ -239,16 +264,17 @@ internal class RiderAuthSessionCoordinator(
 
     suspend fun revalidate(session: RiderSessionContext?): RiderAuthOutcome = guarded {
         requireConfigured()
-        val hint = session ?: return@guarded rejected()
-        if (!hint.isStructurallyValid() || !firebase.hasCurrentUser()) return@guarded rejected()
+        val hint = session ?: return@guarded rejectAndInvalidate()
+        if (!hint.isStructurallyValid() || !firebase.hasCurrentUser()) return@guarded rejectAndInvalidate()
         val token = firebase.idToken(forceRefresh = true).orEmpty()
-        if (token.isBlank()) return@guarded rejected()
+        if (token.isBlank()) return@guarded rejectAndInvalidate()
         val verified = backend.getSession(token, hint.sessionId)
-        if (!verified.isStructurallyValid() || verified.sessionId != hint.sessionId ||
+        if (!verified.isStructurallyValid() ||
+            verified.sessionId != hint.sessionId ||
             verified.sessionEpoch != hint.sessionEpoch ||
-            !verified.riderCode.equals(hint.riderCode, ignoreCase = true)
+            verified.riderCode != hint.riderCode
         ) {
-            return@guarded rejected()
+            return@guarded rejectAndInvalidate()
         }
         installVerified(verified)
         RiderAuthOutcome.Authorized(verified)
@@ -256,15 +282,23 @@ internal class RiderAuthSessionCoordinator(
 
     suspend fun logout(session: RiderSessionContext?) {
         val candidate = session ?: RiderSessionAuthority.snapshot()
-        RiderSessionAuthority.clear()
-        try {
-            if (candidate != null && candidate.sessionId.isNotBlank() && firebase.hasCurrentUser() && backend.isConfigured()) {
-                val token = runCatching { firebase.idToken(forceRefresh = true) }.getOrNull().orEmpty()
-                if (token.isNotBlank()) runCatching { backend.deleteSession(token, candidate.sessionId) }
-            }
-        } finally {
+
+        // All local authorities are invalidated synchronously before the first possible
+        // suspension/token/network operation. The cache clear is a synchronous commit.
+        val revocationTokenProvider = try {
+            RiderSessionAuthority.clear()
             cache.clear()
-            firebase.signOut()
+            firebase.invalidateForLogout()
+        } catch (_: Exception) {
+            RiderSessionAuthority.clear()
+            runCatching { cache.clear() }
+            runCatching { firebase.signOut() }
+            return
+        }
+
+        if (candidate != null && candidate.sessionId.isNotBlank() && backend.isConfigured()) {
+            val token = runCatching { revocationTokenProvider() }.getOrNull().orEmpty()
+            if (token.isNotBlank()) runCatching { backend.deleteSession(token, candidate.sessionId) }
         }
     }
 
@@ -283,9 +317,7 @@ internal class RiderAuthSessionCoordinator(
             RiderSessionAuthority.install(verified)
             true
         }.getOrElse {
-            RiderSessionAuthority.clear()
-            cache.clear()
-            firebase.signOut()
+            invalidateLocalState()
             false
         }
     }
@@ -294,12 +326,15 @@ internal class RiderAuthSessionCoordinator(
         capability: String,
         keys: RiderAuthAttemptKeys
     ): RiderCapabilityPreparation {
-        return try {
+        keys.preparationFor(capability)?.let { return it }
+        val preparation = try {
             backend.prepare(RiderCapabilityKind.ENROLLMENT, capability, keys.enrollmentPrepare)
         } catch (error: RiderBackendException) {
             if (error.statusCode != 401 || error.backendCode != "invalid_capability") throw error
             backend.prepare(RiderCapabilityKind.RECOVERY, capability, keys.recoveryPrepare)
         }
+        keys.rememberPreparation(capability, preparation)
+        return preparation
     }
 
     private suspend fun ensureFirebaseUser(authAlias: String, password: String) {
@@ -321,6 +356,19 @@ internal class RiderAuthSessionCoordinator(
         RiderSessionAuthority.install(session)
     }
 
+    private fun invalidateLocalState() {
+        RiderSessionAuthority.clear()
+        cache.clear()
+        firebase.signOut()
+    }
+
+    private fun rejectAndInvalidate(
+        message: String = "No pudimos validar tu acceso. Revisá los datos o intentá nuevamente."
+    ): RiderAuthOutcome.Rejected {
+        invalidateLocalState()
+        return rejected(message)
+    }
+
     private fun requireConfigured() {
         if (!firebase.isConfigured() || !backend.isConfigured()) throw IllegalStateException("Rider auth is not configured")
     }
@@ -329,9 +377,7 @@ internal class RiderAuthSessionCoordinator(
         return try {
             block()
         } catch (_: Exception) {
-            RiderSessionAuthority.clear()
-            cache.clear()
-            firebase.signOut()
+            invalidateLocalState()
             rejected()
         }
     }
@@ -402,6 +448,13 @@ internal object RiderFirebaseAuthIntegration : RiderFirebaseGateway {
 
     override fun signOut() {
         boundAuth()?.signOut()
+    }
+
+    override fun invalidateForLogout(): suspend () -> String? {
+        val auth = boundAuth()
+        val user = auth?.currentUser
+        auth?.signOut()
+        return { user?.getIdToken(false)?.await()?.token }
     }
 }
 
