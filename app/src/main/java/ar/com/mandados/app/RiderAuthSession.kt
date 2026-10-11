@@ -428,6 +428,7 @@ internal object RiderFirebaseAuthIntegration : RiderFirebaseGateway {
     private fun auth(context: Context): FirebaseAuth? = app(context)?.let(FirebaseAuth::getInstance)
 
     private var applicationContext: Context? = null
+    private var pendingLogoutTokenProvider: (suspend () -> String?)? = null
 
     fun bind(context: Context): RiderFirebaseAuthIntegration {
         applicationContext = context.applicationContext
@@ -435,6 +436,22 @@ internal object RiderFirebaseAuthIntegration : RiderFirebaseGateway {
     }
 
     private fun boundAuth(): FirebaseAuth? = applicationContext?.let(::auth)
+
+    /**
+     * Called from the non-suspending controller bridge before UI navigation/coroutine launch.
+     * It removes the durable restore hint and Firebase current-user state synchronously while
+     * retaining only a one-shot provider for the later best-effort backend DELETE.
+     */
+    fun invalidateBoundLocalLogoutState() {
+        applicationContext?.let { runCatching { AndroidRiderSessionCache(it).clear() } }
+        val auth = boundAuth()
+        val user = auth?.currentUser
+        if (user != null) {
+            val provider: suspend () -> String? = { user.getIdToken(false).await()?.token }
+            synchronized(this) { pendingLogoutTokenProvider = provider }
+        }
+        auth?.signOut()
+    }
 
     override fun isConfigured(): Boolean = optionsOrNull() != null && applicationContext != null
     override fun hasCurrentUser(): Boolean = boundAuth()?.currentUser != null
@@ -466,6 +483,12 @@ internal object RiderFirebaseAuthIntegration : RiderFirebaseGateway {
     }
 
     override fun invalidateForLogout(): suspend () -> String? {
+        synchronized(this) {
+            pendingLogoutTokenProvider?.let { pending ->
+                pendingLogoutTokenProvider = null
+                return pending
+            }
+        }
         val auth = boundAuth()
         val user = auth?.currentUser
         auth?.signOut()
