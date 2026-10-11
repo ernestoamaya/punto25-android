@@ -26,7 +26,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 1
+          fetch-depth: 2
 
       - name: Classify PR changes
         id: classify
@@ -58,42 +58,6 @@ jobs:
             done < "$file_list"
 
             [[ "$saw_change" == "true" ]]
-          }
-
-          ensure_pr_merge_topology() {
-            local repo="$1"
-            local merge_sha="$2"
-            local event_ref="$3"
-            local is_shallow
-            local git_dir
-            local shallow_file
-            local fetched_sha
-
-            [[ -n "$merge_sha" && "$event_ref" == refs/pull/*/merge ]] || return 2
-            git -C "$repo" cat-file -e "${merge_sha}^{commit}" 2>/dev/null || return 2
-
-            is_shallow="$(git -C "$repo" rev-parse --is-shallow-repository 2>/dev/null)" || return 2
-            if [[ "$is_shallow" == "true" ]]; then
-              git_dir="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" || return 2
-              shallow_file="$git_dir/shallow"
-              [[ -f "$shallow_file" ]] || return 2
-
-              if grep -Fxq "$merge_sha" "$shallow_file"; then
-                # actions/checkout fetched the event merge by exact SHA at depth=1.
-                # Deepen that exact object by one generation so both parents become visible.
-                git -C "$repo" fetch --quiet --no-tags --deepen=1 origin "$merge_sha" || return 2
-                fetched_sha="$(git -C "$repo" rev-parse FETCH_HEAD 2>/dev/null)" || return 2
-                [[ "$fetched_sha" == "$merge_sha" ]] || return 2
-              fi
-            fi
-
-            is_shallow="$(git -C "$repo" rev-parse --is-shallow-repository 2>/dev/null)" || return 2
-            if [[ "$is_shallow" == "true" ]]; then
-              git_dir="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" || return 2
-              shallow_file="$git_dir/shallow"
-              [[ -f "$shallow_file" ]] || return 2
-              grep -Fxq "$merge_sha" "$shallow_file" && return 2
-            fi
           }
 
           classify_pr_merge() {
@@ -131,10 +95,10 @@ jobs:
             local lagged_head lagged_base lagged_merge
             local mixed_head mixed_base mixed_merge
             local empty_head empty_base empty_merge
-            local row case_name case_base case_merge case_head expected_rc
-            local shallow_repo event_ref rc regression_event regression_run_heavy
+            local row case_name case_ref case_base case_merge case_head expected_rc
+            local depth1_repo depth2_repo rc regression_event regression_run_heavy
 
-            rm -rf "$fixture_repo" "$fixture_remote" "$RUNNER_TEMP"/ci-shallow-*
+            rm -rf "$fixture_repo" "$fixture_remote" "$RUNNER_TEMP"/ci-depth1-* "$RUNNER_TEMP"/ci-depth2-*
             git init -q "$fixture_repo"
             git -C "$fixture_repo" config user.name "CI Classifier Regression"
             git -C "$fixture_repo" config user.email "ci-classifier@example.invalid"
@@ -206,30 +170,28 @@ jobs:
 
             git clone -q --bare "$fixture_repo" "$fixture_remote"
 
-            # Reproduce actions/checkout exactly enough for this invariant:
-            # fetch the synthetic merge by exact SHA at depth=1. Before deepening,
-            # parent verification MUST fail with rc=2 (the defect on HEAD 325789d1...).
-            # One-generation deepen of the same exact SHA must then expose both parents.
+            # Reproduce the exact invariant that failed on HEAD 325789d1...:
+            # a depth=1 checkout of a synthetic merge hides its parents, while a
+            # fresh depth=2 checkout exposes both parents without full history.
             for row in \
-              "workflow|$workflow_base|$workflow_merge|$workflow_head|1" \
-              "docs-current|$current_docs_base|$current_docs_merge|$current_docs_head|0" \
-              "docs-lagged|$lagged_base|$lagged_merge|$lagged_head|0" \
-              "mixed|$mixed_base|$mixed_merge|$mixed_head|1" \
-              "empty|$empty_base|$empty_merge|$empty_head|1"; do
-              IFS='|' read -r case_name case_base case_merge case_head expected_rc <<< "$row"
-              shallow_repo="$RUNNER_TEMP/ci-shallow-$case_name"
-              event_ref="refs/pull/fixture/merge"
+              "workflow|refs/heads/workflow-base|$workflow_base|$workflow_merge|$workflow_head|1" \
+              "docs-current|refs/heads/docs-current-base|$current_docs_base|$current_docs_merge|$current_docs_head|0" \
+              "docs-lagged|refs/heads/lagged-base|$lagged_base|$lagged_merge|$lagged_head|0" \
+              "mixed|refs/heads/mixed-base|$mixed_base|$mixed_merge|$mixed_head|1" \
+              "empty|refs/heads/empty-base|$empty_base|$empty_merge|$empty_head|1"; do
+              IFS='|' read -r case_name case_ref case_base case_merge case_head expected_rc <<< "$row"
+              depth1_repo="$RUNNER_TEMP/ci-depth1-$case_name"
+              depth2_repo="$RUNNER_TEMP/ci-depth2-$case_name"
 
-              git init -q "$shallow_repo"
-              git -C "$shallow_repo" remote add origin "file://$fixture_remote"
-              git -C "$shallow_repo" fetch -q --no-tags --depth=1 origin "$case_merge"
-              git -C "$shallow_repo" checkout -q --detach FETCH_HEAD
-              [[ "$(git -C "$shallow_repo" rev-parse HEAD)" == "$case_merge" ]] || {
-                echo "::error::Shallow fixture checkout mismatch for $case_name."
+              git init -q "$depth1_repo"
+              git -C "$depth1_repo" remote add origin "file://$fixture_remote"
+              git -C "$depth1_repo" fetch -q --no-tags --depth=1 origin "$case_ref"
+              git -C "$depth1_repo" checkout -q --detach FETCH_HEAD
+              [[ "$(git -C "$depth1_repo" rev-parse HEAD)" == "$case_merge" ]] || {
+                echo "::error::Depth=1 fixture checkout mismatch for $case_name."
                 return 1
               }
-
-              if classify_pr_merge "$shallow_repo" "$case_base" "$case_merge" "$case_head" "$changed_paths"; then
+              if classify_pr_merge "$depth1_repo" "$case_base" "$case_merge" "$case_head" "$changed_paths"; then
                 echo "::error::Depth=1 fixture unexpectedly exposed merge parents for $case_name."
                 return 1
               else
@@ -240,23 +202,26 @@ jobs:
                 }
               fi
 
-              if ! ensure_pr_merge_topology "$shallow_repo" "$case_merge" "$event_ref"; then
-                echo "::error::Minimal deepen failed for $case_name."
+              git init -q "$depth2_repo"
+              git -C "$depth2_repo" remote add origin "file://$fixture_remote"
+              git -C "$depth2_repo" fetch -q --no-tags --depth=2 origin "$case_ref"
+              git -C "$depth2_repo" checkout -q --detach FETCH_HEAD
+              [[ "$(git -C "$depth2_repo" rev-parse HEAD)" == "$case_merge" ]] || {
+                echo "::error::Depth=2 fixture checkout mismatch for $case_name."
                 return 1
-              fi
-
-              if classify_pr_merge "$shallow_repo" "$case_base" "$case_merge" "$case_head" "$changed_paths"; then
+              }
+              if classify_pr_merge "$depth2_repo" "$case_base" "$case_merge" "$case_head" "$changed_paths"; then
                 rc=0
               else
                 rc=$?
               fi
               [[ "$rc" -eq "$expected_rc" ]] || {
-                echo "::error::Post-deepen classification mismatch for $case_name: rc=$rc expected=$expected_rc."
+                echo "::error::Depth=2 classification mismatch for $case_name: rc=$rc expected=$expected_rc."
                 return 1
               }
             done
 
-            # The obsolete base-vs-historical-head method must reproduce the original false HEAVY.
+            # The obsolete base-vs-historical-head method reproduces the original false HEAVY.
             git -C "$fixture_repo" diff --name-only --no-renames "$lagged_base" "$lagged_head" > "$direct_wrong_paths"
             if classify_paths "$direct_wrong_paths"; then
               echo "::error::Direct base-vs-historical-head fixture did not reproduce main-only drift."
@@ -264,17 +229,12 @@ jobs:
             fi
 
             # Invalid synthetic merge identity: topology is readable, but parent 2 mismatches.
-            shallow_repo="$RUNNER_TEMP/ci-shallow-invalid"
-            event_ref="refs/pull/fixture/merge"
-            git init -q "$shallow_repo"
-            git -C "$shallow_repo" remote add origin "file://$fixture_remote"
-            git -C "$shallow_repo" fetch -q --no-tags --depth=1 origin "$current_docs_merge"
-            git -C "$shallow_repo" checkout -q --detach FETCH_HEAD
-            ensure_pr_merge_topology "$shallow_repo" "$current_docs_merge" "$event_ref" || {
-              echo "::error::Invalid-identity fixture could not deepen valid Git topology."
-              return 1
-            }
-            if classify_pr_merge "$shallow_repo" "$current_docs_base" "$current_docs_merge" "$workflow_head" "$changed_paths"; then
+            depth2_repo="$RUNNER_TEMP/ci-depth2-invalid"
+            git init -q "$depth2_repo"
+            git -C "$depth2_repo" remote add origin "file://$fixture_remote"
+            git -C "$depth2_repo" fetch -q --no-tags --depth=2 origin refs/heads/docs-current-base
+            git -C "$depth2_repo" checkout -q --detach FETCH_HEAD
+            if classify_pr_merge "$depth2_repo" "$current_docs_base" "$current_docs_merge" "$workflow_head" "$changed_paths"; then
               echo "::error::Invalid synthetic merge identity must not classify as lightweight."
               return 1
             else
@@ -283,12 +243,6 @@ jobs:
                 echo "::error::Invalid synthetic merge identity must fail verification with rc=2."
                 return 1
               }
-            fi
-
-            # A malformed/non-PR merge ref must never be accepted for topology deepening.
-            if ensure_pr_merge_topology "$shallow_repo" "$current_docs_merge" "refs/heads/main"; then
-              echo "::error::Non-PR ref must fail closed."
-              return 1
             fi
 
             # Push and workflow_dispatch remain HEAVY by default.
@@ -303,7 +257,7 @@ jobs:
               }
             done
 
-            echo "Classifier regressions PASS: depth1-unverifiable reproduced; exact-SHA minimal-deepen valid; workflow=HEAVY; docs-current=LIGHT; docs-lagged=LIGHT; mixed=HEAVY; empty=HEAVY; invalid-merge=HEAVY; push=HEAVY; workflow_dispatch=HEAVY."
+            echo "Classifier regressions PASS: depth1-unverifiable reproduced; depth2 topology valid; workflow=HEAVY; docs-current=LIGHT; docs-lagged=LIGHT; mixed=HEAVY; empty=HEAVY; invalid-merge=HEAVY; push=HEAVY; workflow_dispatch=HEAVY."
           }
 
           run_classifier_regressions
@@ -314,28 +268,23 @@ jobs:
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             if [[ -z "${BASE_SHA:-}" || -z "${PR_HEAD_SHA:-}" || -z "${EVENT_SHA:-}" || -z "${EVENT_REF:-}" ]]; then
               reason="missing PR base/head/merge SHA or ref; fail closed to heavy CI"
+            elif [[ "$EVENT_REF" != refs/pull/*/merge ]]; then
+              reason="event ref is not a pull-request merge ref; fail closed to heavy CI"
             else
               checkout_sha="$(git rev-parse HEAD 2>/dev/null || true)"
               if [[ -z "$checkout_sha" || "$checkout_sha" != "$EVENT_SHA" ]]; then
                 reason="checkout is not the event merge SHA; fail closed to heavy CI"
-              elif ! ensure_pr_merge_topology "$GITHUB_WORKSPACE" "$checkout_sha" "$EVENT_REF"; then
-                reason="PR merge topology deepen or verification failed; fail closed to heavy CI"
               else
-                checkout_sha_after_deepen="$(git rev-parse HEAD 2>/dev/null || true)"
-                if [[ "$checkout_sha_after_deepen" != "$EVENT_SHA" ]]; then
-                  reason="checkout changed while deepening PR merge topology; fail closed to heavy CI"
+                changed_paths="$RUNNER_TEMP/changed-paths.txt"
+                if classify_pr_merge "$GITHUB_WORKSPACE" "$BASE_SHA" "$checkout_sha" "$PR_HEAD_SHA" "$changed_paths"; then
+                  run_heavy=false
+                  reason="unequivocally documentation-only effective PR contribution"
                 else
-                  changed_paths="$RUNNER_TEMP/changed-paths.txt"
-                  if classify_pr_merge "$GITHUB_WORKSPACE" "$BASE_SHA" "$checkout_sha" "$PR_HEAD_SHA" "$changed_paths"; then
-                    run_heavy=false
-                    reason="unequivocally documentation-only effective PR contribution"
+                  rc=$?
+                  if [[ "$rc" -eq 1 ]]; then
+                    reason="mixed, non-documentation, or empty effective PR diff; heavy CI required"
                   else
-                    rc=$?
-                    if [[ "$rc" -eq 1 ]]; then
-                      reason="mixed, non-documentation, or empty effective PR diff; heavy CI required"
-                    else
-                      reason="merge-ref verification or PR diff classification failed; fail closed to heavy CI"
-                    fi
+                    reason="merge-ref verification or PR diff classification failed; fail closed to heavy CI"
                   fi
                 fi
               fi
