@@ -25,16 +25,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
 
       - name: Classify PR changes
         id: classify
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
           classify_paths() {
             local file_list="$1"
@@ -56,45 +60,233 @@ jobs:
             [[ "$saw_change" == "true" ]]
           }
 
-          docs_only_fixture="$RUNNER_TEMP/docs-only-paths.txt"
-          mixed_fixture="$RUNNER_TEMP/mixed-paths.txt"
-          empty_fixture="$RUNNER_TEMP/empty-paths.txt"
+          classify_pr_merge() {
+            local repo="$1"
+            local base_sha="$2"
+            local merge_sha="$3"
+            local pr_head_sha="$4"
+            local changed_paths="$5"
+            local parents
+            local first_parent
+            local second_parent
+            local extra_parent
 
-          printf '%s\n' README.md docs/PENDING_MASTER.md LICENSE .github/CODEOWNERS > "$docs_only_fixture"
-          printf '%s\n' README.md .github/workflows/ci.yml > "$mixed_fixture"
-          : > "$empty_fixture"
+            [[ -n "$base_sha" && -n "$merge_sha" && -n "$pr_head_sha" ]] || return 2
 
-          if ! classify_paths "$docs_only_fixture"; then
-            echo "::error::Classifier regression: documentation-only fixture must be lightweight."
-            exit 1
-          fi
-          if classify_paths "$mixed_fixture"; then
-            echo "::error::Classifier regression: mixed fixture must use heavy CI."
-            exit 1
-          fi
-          if classify_paths "$empty_fixture"; then
-            echo "::error::Classifier regression: empty/ambiguous fixture must use heavy CI."
-            exit 1
-          fi
+            parents="$(git -C "$repo" show -s --format=%P "$merge_sha" 2>/dev/null)" || return 2
+            read -r first_parent second_parent extra_parent <<< "$parents"
+            [[ -n "$first_parent" && -n "$second_parent" && -z "${extra_parent:-}" ]] || return 2
+            [[ "$first_parent" == "$base_sha" && "$second_parent" == "$pr_head_sha" ]] || return 2
+            git -C "$repo" cat-file -e "${base_sha}^{commit}" 2>/dev/null || return 2
+            git -C "$repo" cat-file -e "${pr_head_sha}^{commit}" 2>/dev/null || return 2
+            git -C "$repo" diff --name-only --no-renames "$base_sha" "$merge_sha" > "$changed_paths" || return 2
+
+            classify_paths "$changed_paths"
+          }
+
+          run_classifier_regressions() {
+            local fixture_repo="$RUNNER_TEMP/ci-classifier-regression"
+            local fixture_remote="$RUNNER_TEMP/ci-classifier-origin.git"
+            local changed_paths="$RUNNER_TEMP/ci-classifier-regression-paths.txt"
+            local direct_wrong_paths="$RUNNER_TEMP/direct-base-head-paths.txt"
+            local root_sha
+            local workflow_head workflow_base workflow_merge
+            local current_docs_head current_docs_base current_docs_merge
+            local lagged_head lagged_base lagged_merge
+            local mixed_head mixed_base mixed_merge
+            local empty_head empty_base empty_merge
+            local row case_name case_ref case_base case_merge case_head expected_rc
+            local depth1_repo depth2_repo rc regression_event regression_run_heavy
+
+            rm -rf "$fixture_repo" "$fixture_remote" "$RUNNER_TEMP"/ci-depth1-* "$RUNNER_TEMP"/ci-depth2-*
+            git init -q "$fixture_repo"
+            git -C "$fixture_repo" config user.name "CI Classifier Regression"
+            git -C "$fixture_repo" config user.email "ci-classifier@example.invalid"
+            mkdir -p "$fixture_repo/docs"
+            printf '%s\n' "# Seed" > "$fixture_repo/README.md"
+            printf '%s\n' "stale governance" > "$fixture_repo/docs/PENDING_MASTER.md"
+            git -C "$fixture_repo" add README.md docs/PENDING_MASTER.md
+            git -C "$fixture_repo" commit -q -m seed
+            root_sha="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+            # Workflow / non-documentation PR.
+            git -C "$fixture_repo" switch -q -c workflow-pr "$root_sha"
+            mkdir -p "$fixture_repo/.github/workflows"
+            printf '%s\n' "name: workflow change" > "$fixture_repo/.github/workflows/ci.yml"
+            git -C "$fixture_repo" add .github/workflows/ci.yml
+            git -C "$fixture_repo" commit -q -m workflow
+            workflow_head="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" switch -q -c workflow-base "$root_sha"
+            workflow_base="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" merge -q --no-ff --no-edit workflow-pr
+            workflow_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+            # Documentation-only PR on current base.
+            git -C "$fixture_repo" switch -q -c docs-current-pr "$root_sha"
+            printf '%s\n' "docs update" >> "$fixture_repo/README.md"
+            git -C "$fixture_repo" add README.md
+            git -C "$fixture_repo" commit -q -m docs-current
+            current_docs_head="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" switch -q -c docs-current-base "$root_sha"
+            current_docs_base="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" merge -q --no-ff --no-edit docs-current-pr
+            current_docs_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+            # Documentation-only PR whose branch lagged while main advanced.
+            git -C "$fixture_repo" switch -q -c lagged-pr "$root_sha"
+            git -C "$fixture_repo" rm -q docs/PENDING_MASTER.md
+            git -C "$fixture_repo" commit -q -m docs-delete
+            lagged_head="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" switch -q -c lagged-base "$root_sha"
+            mkdir -p "$fixture_repo/.github/workflows"
+            printf '%s\n' "name: main-only advancement" > "$fixture_repo/.github/workflows/main-only.yml"
+            git -C "$fixture_repo" add .github/workflows/main-only.yml
+            git -C "$fixture_repo" commit -q -m main-advanced
+            lagged_base="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" merge -q --no-ff --no-edit lagged-pr
+            lagged_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+            # Mixed documentation + code PR.
+            git -C "$fixture_repo" switch -q -c mixed-pr "$root_sha"
+            mkdir -p "$fixture_repo/app/src/main/kotlin"
+            printf '%s\n' "docs update" >> "$fixture_repo/README.md"
+            printf '%s\n' "code change" > "$fixture_repo/app/src/main/kotlin/example.kt"
+            git -C "$fixture_repo" add README.md app/src/main/kotlin/example.kt
+            git -C "$fixture_repo" commit -q -m mixed
+            mixed_head="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" switch -q -c mixed-base "$root_sha"
+            mixed_base="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" merge -q --no-ff --no-edit mixed-pr
+            mixed_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+            # Empty/ambiguous effective diff.
+            git -C "$fixture_repo" switch -q -c empty-pr "$root_sha"
+            git -C "$fixture_repo" commit -q --allow-empty -m empty
+            empty_head="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" switch -q -c empty-base "$root_sha"
+            empty_base="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" merge -q --no-ff --no-edit empty-pr
+            empty_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+            git clone -q --bare "$fixture_repo" "$fixture_remote"
+
+            # Reproduce the exact invariant that failed on HEAD 325789d1...:
+            # a depth=1 checkout of a synthetic merge hides its parents, while a
+            # fresh depth=2 checkout exposes both parents without full history.
+            for row in \
+              "workflow|refs/heads/workflow-base|$workflow_base|$workflow_merge|$workflow_head|1" \
+              "docs-current|refs/heads/docs-current-base|$current_docs_base|$current_docs_merge|$current_docs_head|0" \
+              "docs-lagged|refs/heads/lagged-base|$lagged_base|$lagged_merge|$lagged_head|0" \
+              "mixed|refs/heads/mixed-base|$mixed_base|$mixed_merge|$mixed_head|1" \
+              "empty|refs/heads/empty-base|$empty_base|$empty_merge|$empty_head|1"; do
+              IFS='|' read -r case_name case_ref case_base case_merge case_head expected_rc <<< "$row"
+              depth1_repo="$RUNNER_TEMP/ci-depth1-$case_name"
+              depth2_repo="$RUNNER_TEMP/ci-depth2-$case_name"
+
+              git init -q "$depth1_repo"
+              git -C "$depth1_repo" remote add origin "file://$fixture_remote"
+              git -C "$depth1_repo" fetch -q --no-tags --depth=1 origin "$case_ref"
+              git -C "$depth1_repo" checkout -q --detach FETCH_HEAD
+              [[ "$(git -C "$depth1_repo" rev-parse HEAD)" == "$case_merge" ]] || {
+                echo "::error::Depth=1 fixture checkout mismatch for $case_name."
+                return 1
+              }
+              if classify_pr_merge "$depth1_repo" "$case_base" "$case_merge" "$case_head" "$changed_paths"; then
+                echo "::error::Depth=1 fixture unexpectedly exposed merge parents for $case_name."
+                return 1
+              else
+                rc=$?
+                [[ "$rc" -eq 2 ]] || {
+                  echo "::error::Depth=1 fixture did not reproduce unverifiable merge topology for $case_name."
+                  return 1
+                }
+              fi
+
+              git init -q "$depth2_repo"
+              git -C "$depth2_repo" remote add origin "file://$fixture_remote"
+              git -C "$depth2_repo" fetch -q --no-tags --depth=2 origin "$case_ref"
+              git -C "$depth2_repo" checkout -q --detach FETCH_HEAD
+              [[ "$(git -C "$depth2_repo" rev-parse HEAD)" == "$case_merge" ]] || {
+                echo "::error::Depth=2 fixture checkout mismatch for $case_name."
+                return 1
+              }
+              if classify_pr_merge "$depth2_repo" "$case_base" "$case_merge" "$case_head" "$changed_paths"; then
+                rc=0
+              else
+                rc=$?
+              fi
+              [[ "$rc" -eq "$expected_rc" ]] || {
+                echo "::error::Depth=2 classification mismatch for $case_name: rc=$rc expected=$expected_rc."
+                return 1
+              }
+            done
+
+            # The obsolete base-vs-historical-head method reproduces the original false HEAVY.
+            git -C "$fixture_repo" diff --name-only --no-renames "$lagged_base" "$lagged_head" > "$direct_wrong_paths"
+            if classify_paths "$direct_wrong_paths"; then
+              echo "::error::Direct base-vs-historical-head fixture did not reproduce main-only drift."
+              return 1
+            fi
+
+            # Invalid synthetic merge identity: topology is readable, but parent 2 mismatches.
+            depth2_repo="$RUNNER_TEMP/ci-depth2-invalid"
+            git init -q "$depth2_repo"
+            git -C "$depth2_repo" remote add origin "file://$fixture_remote"
+            git -C "$depth2_repo" fetch -q --no-tags --depth=2 origin refs/heads/docs-current-base
+            git -C "$depth2_repo" checkout -q --detach FETCH_HEAD
+            if classify_pr_merge "$depth2_repo" "$current_docs_base" "$current_docs_merge" "$workflow_head" "$changed_paths"; then
+              echo "::error::Invalid synthetic merge identity must not classify as lightweight."
+              return 1
+            else
+              rc=$?
+              [[ "$rc" -eq 2 ]] || {
+                echo "::error::Invalid synthetic merge identity must fail verification with rc=2."
+                return 1
+              }
+            fi
+
+            # Push and workflow_dispatch remain HEAVY by default.
+            for regression_event in push workflow_dispatch; do
+              regression_run_heavy=true
+              if [[ "$regression_event" == "pull_request" ]]; then
+                regression_run_heavy=false
+              fi
+              [[ "$regression_run_heavy" == "true" ]] || {
+                echo "::error::Non-PR event must default to heavy CI."
+                return 1
+              }
+            done
+
+            echo "Classifier regressions PASS: depth1-unverifiable reproduced; depth2 topology valid; workflow=HEAVY; docs-current=LIGHT; docs-lagged=LIGHT; mixed=HEAVY; empty=HEAVY; invalid-merge=HEAVY; push=HEAVY; workflow_dispatch=HEAVY."
+          }
+
+          run_classifier_regressions
 
           run_heavy=true
           reason="non-PR event defaults to heavy CI"
 
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            if [[ -z "${BASE_SHA:-}" || -z "${HEAD_SHA:-}" ]]; then
-              reason="missing PR base/head SHA; fail closed to heavy CI"
+            if [[ -z "${BASE_SHA:-}" || -z "${PR_HEAD_SHA:-}" || -z "${EVENT_SHA:-}" || -z "${EVENT_REF:-}" ]]; then
+              reason="missing PR base/head/merge SHA or ref; fail closed to heavy CI"
+            elif [[ "$EVENT_REF" != refs/pull/*/merge ]]; then
+              reason="event ref is not a pull-request merge ref; fail closed to heavy CI"
             else
-              changed_paths="$RUNNER_TEMP/changed-paths.txt"
-              if git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA" \
-                && git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_paths"; then
-                if classify_paths "$changed_paths"; then
-                  run_heavy=false
-                  reason="unequivocally documentation-only PR"
-                else
-                  reason="mixed, non-documentation, or empty PR diff; heavy CI required"
-                fi
+              checkout_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+              if [[ -z "$checkout_sha" || "$checkout_sha" != "$EVENT_SHA" ]]; then
+                reason="checkout is not the event merge SHA; fail closed to heavy CI"
               else
-                reason="PR diff classification failed; fail closed to heavy CI"
+                changed_paths="$RUNNER_TEMP/changed-paths.txt"
+                if classify_pr_merge "$GITHUB_WORKSPACE" "$BASE_SHA" "$checkout_sha" "$PR_HEAD_SHA" "$changed_paths"; then
+                  run_heavy=false
+                  reason="unequivocally documentation-only effective PR contribution"
+                else
+                  rc=$?
+                  if [[ "$rc" -eq 1 ]]; then
+                    reason="mixed, non-documentation, or empty effective PR diff; heavy CI required"
+                  else
+                    reason="merge-ref verification or PR diff classification failed; fail closed to heavy CI"
+                  fi
+                fi
               fi
             fi
           fi
