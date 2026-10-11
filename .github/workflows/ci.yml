@@ -79,7 +79,9 @@ jobs:
               [[ -f "$shallow_file" ]] || return 2
 
               if grep -Fxq "$merge_sha" "$shallow_file"; then
-                git -C "$repo" fetch --quiet --no-tags --deepen=1 origin "$event_ref" || return 2
+                # actions/checkout fetched the event merge by exact SHA at depth=1.
+                # Deepen that exact object by one generation so both parents become visible.
+                git -C "$repo" fetch --quiet --no-tags --deepen=1 origin "$merge_sha" || return 2
                 fetched_sha="$(git -C "$repo" rev-parse FETCH_HEAD 2>/dev/null)" || return 2
                 [[ "$fetched_sha" == "$merge_sha" ]] || return 2
               fi
@@ -124,33 +126,13 @@ jobs:
             local changed_paths="$RUNNER_TEMP/ci-classifier-regression-paths.txt"
             local direct_wrong_paths="$RUNNER_TEMP/direct-base-head-paths.txt"
             local root_sha
-            local workflow_head
-            local workflow_base
-            local workflow_merge
-            local current_docs_head
-            local current_docs_base
-            local current_docs_merge
-            local lagged_head
-            local lagged_base
-            local lagged_merge
-            local mixed_head
-            local mixed_base
-            local mixed_merge
-            local empty_head
-            local empty_base
-            local empty_merge
-            local row
-            local case_name
-            local case_ref
-            local case_base
-            local case_merge
-            local case_head
-            local expected_rc
-            local shallow_repo
-            local pseudo_ref
-            local rc
-            local regression_event
-            local regression_run_heavy
+            local workflow_head workflow_base workflow_merge
+            local current_docs_head current_docs_base current_docs_merge
+            local lagged_head lagged_base lagged_merge
+            local mixed_head mixed_base mixed_merge
+            local empty_head empty_base empty_merge
+            local row case_name case_base case_merge case_head expected_rc
+            local shallow_repo event_ref rc regression_event regression_run_heavy
 
             rm -rf "$fixture_repo" "$fixture_remote" "$RUNNER_TEMP"/ci-shallow-*
             git init -q "$fixture_repo"
@@ -163,7 +145,7 @@ jobs:
             git -C "$fixture_repo" commit -q -m seed
             root_sha="$(git -C "$fixture_repo" rev-parse HEAD)"
 
-            # 1/2. Workflow PR => HEAVY from a valid merge topology.
+            # Workflow / non-documentation PR.
             git -C "$fixture_repo" switch -q -c workflow-pr "$root_sha"
             mkdir -p "$fixture_repo/.github/workflows"
             printf '%s\n' "name: workflow change" > "$fixture_repo/.github/workflows/ci.yml"
@@ -175,7 +157,7 @@ jobs:
             git -C "$fixture_repo" merge -q --no-ff --no-edit workflow-pr
             workflow_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
 
-            # 3. Documentation-only PR on the current base => LIGHT.
+            # Documentation-only PR on current base.
             git -C "$fixture_repo" switch -q -c docs-current-pr "$root_sha"
             printf '%s\n' "docs update" >> "$fixture_repo/README.md"
             git -C "$fixture_repo" add README.md
@@ -186,7 +168,7 @@ jobs:
             git -C "$fixture_repo" merge -q --no-ff --no-edit docs-current-pr
             current_docs_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
 
-            # 4. Documentation-only PR whose branch lagged behind main => LIGHT.
+            # Documentation-only PR whose branch lagged while main advanced.
             git -C "$fixture_repo" switch -q -c lagged-pr "$root_sha"
             git -C "$fixture_repo" rm -q docs/PENDING_MASTER.md
             git -C "$fixture_repo" commit -q -m docs-delete
@@ -200,7 +182,7 @@ jobs:
             git -C "$fixture_repo" merge -q --no-ff --no-edit lagged-pr
             lagged_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
 
-            # 5. Mixed documentation + code => HEAVY.
+            # Mixed documentation + code PR.
             git -C "$fixture_repo" switch -q -c mixed-pr "$root_sha"
             mkdir -p "$fixture_repo/app/src/main/kotlin"
             printf '%s\n' "docs update" >> "$fixture_repo/README.md"
@@ -213,7 +195,7 @@ jobs:
             git -C "$fixture_repo" merge -q --no-ff --no-edit mixed-pr
             mixed_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
 
-            # 6. Empty/ambiguous effective diff => HEAVY.
+            # Empty/ambiguous effective diff.
             git -C "$fixture_repo" switch -q -c empty-pr "$root_sha"
             git -C "$fixture_repo" commit -q --allow-empty -m empty
             empty_head="$(git -C "$fixture_repo" rev-parse HEAD)"
@@ -224,21 +206,23 @@ jobs:
 
             git clone -q --bare "$fixture_repo" "$fixture_remote"
 
-            # Every PR fixture starts with an Actions-equivalent depth=1 checkout.
-            # The pre-deepen rc=2 assertion is the regression that the prior HEAD lacked.
+            # Reproduce actions/checkout exactly enough for this invariant:
+            # fetch the synthetic merge by exact SHA at depth=1. Before deepening,
+            # parent verification MUST fail with rc=2 (the defect on HEAD 325789d1...).
+            # One-generation deepen of the same exact SHA must then expose both parents.
             for row in \
-              "workflow|refs/heads/workflow-base|$workflow_base|$workflow_merge|$workflow_head|1" \
-              "docs-current|refs/heads/docs-current-base|$current_docs_base|$current_docs_merge|$current_docs_head|0" \
-              "docs-lagged|refs/heads/lagged-base|$lagged_base|$lagged_merge|$lagged_head|0" \
-              "mixed|refs/heads/mixed-base|$mixed_base|$mixed_merge|$mixed_head|1" \
-              "empty|refs/heads/empty-base|$empty_base|$empty_merge|$empty_head|1"; do
-              IFS='|' read -r case_name case_ref case_base case_merge case_head expected_rc <<< "$row"
+              "workflow|$workflow_base|$workflow_merge|$workflow_head|1" \
+              "docs-current|$current_docs_base|$current_docs_merge|$current_docs_head|0" \
+              "docs-lagged|$lagged_base|$lagged_merge|$lagged_head|0" \
+              "mixed|$mixed_base|$mixed_merge|$mixed_head|1" \
+              "empty|$empty_base|$empty_merge|$empty_head|1"; do
+              IFS='|' read -r case_name case_base case_merge case_head expected_rc <<< "$row"
               shallow_repo="$RUNNER_TEMP/ci-shallow-$case_name"
-              pseudo_ref="refs/pull/$case_name/merge"
+              event_ref="refs/pull/fixture/merge"
 
               git init -q "$shallow_repo"
               git -C "$shallow_repo" remote add origin "file://$fixture_remote"
-              git -C "$shallow_repo" fetch -q --no-tags --depth=1 origin "$case_ref"
+              git -C "$shallow_repo" fetch -q --no-tags --depth=1 origin "$case_merge"
               git -C "$shallow_repo" checkout -q --detach FETCH_HEAD
               [[ "$(git -C "$shallow_repo" rev-parse HEAD)" == "$case_merge" ]] || {
                 echo "::error::Shallow fixture checkout mismatch for $case_name."
@@ -256,8 +240,7 @@ jobs:
                 }
               fi
 
-              git -C "$fixture_remote" update-ref "$pseudo_ref" "$case_merge"
-              if ! ensure_pr_merge_topology "$shallow_repo" "$case_merge" "$pseudo_ref"; then
+              if ! ensure_pr_merge_topology "$shallow_repo" "$case_merge" "$event_ref"; then
                 echo "::error::Minimal deepen failed for $case_name."
                 return 1
               fi
@@ -273,22 +256,21 @@ jobs:
               }
             done
 
-            # The old base-vs-historical-head method must reproduce the original lagged-branch false HEAVY.
+            # The obsolete base-vs-historical-head method must reproduce the original false HEAVY.
             git -C "$fixture_repo" diff --name-only --no-renames "$lagged_base" "$lagged_head" > "$direct_wrong_paths"
             if classify_paths "$direct_wrong_paths"; then
               echo "::error::Direct base-vs-historical-head fixture did not reproduce main-only drift."
               return 1
             fi
 
-            # 7. A synthetic merge with inconsistent parent identity must fail closed after deepen.
+            # Invalid synthetic merge identity: topology is readable, but parent 2 mismatches.
             shallow_repo="$RUNNER_TEMP/ci-shallow-invalid"
-            pseudo_ref="refs/pull/invalid/merge"
-            git -C "$fixture_remote" update-ref "$pseudo_ref" "$current_docs_merge"
+            event_ref="refs/pull/fixture/merge"
             git init -q "$shallow_repo"
             git -C "$shallow_repo" remote add origin "file://$fixture_remote"
-            git -C "$shallow_repo" fetch -q --no-tags --depth=1 origin "$pseudo_ref"
+            git -C "$shallow_repo" fetch -q --no-tags --depth=1 origin "$current_docs_merge"
             git -C "$shallow_repo" checkout -q --detach FETCH_HEAD
-            ensure_pr_merge_topology "$shallow_repo" "$current_docs_merge" "$pseudo_ref" || {
+            ensure_pr_merge_topology "$shallow_repo" "$current_docs_merge" "$event_ref" || {
               echo "::error::Invalid-identity fixture could not deepen valid Git topology."
               return 1
             }
@@ -303,7 +285,13 @@ jobs:
               }
             fi
 
-            # 8/9. Non-PR events default to HEAVY and never enter PR topology classification.
+            # A malformed/non-PR merge ref must never be accepted for topology deepening.
+            if ensure_pr_merge_topology "$shallow_repo" "$current_docs_merge" "refs/heads/main"; then
+              echo "::error::Non-PR ref must fail closed."
+              return 1
+            fi
+
+            # Push and workflow_dispatch remain HEAVY by default.
             for regression_event in push workflow_dispatch; do
               regression_run_heavy=true
               if [[ "$regression_event" == "pull_request" ]]; then
@@ -315,7 +303,7 @@ jobs:
               }
             done
 
-            echo "Classifier regressions PASS: depth1-unverifiable reproduced; minimal-deepen valid; workflow=HEAVY; docs-current=LIGHT; docs-lagged=LIGHT; mixed=HEAVY; empty=HEAVY; invalid-merge=HEAVY; push=HEAVY; workflow_dispatch=HEAVY."
+            echo "Classifier regressions PASS: depth1-unverifiable reproduced; exact-SHA minimal-deepen valid; workflow=HEAVY; docs-current=LIGHT; docs-lagged=LIGHT; mixed=HEAVY; empty=HEAVY; invalid-merge=HEAVY; push=HEAVY; workflow_dispatch=HEAVY."
           }
 
           run_classifier_regressions
