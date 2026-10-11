@@ -32,7 +32,8 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
           set -uo pipefail
 
@@ -56,45 +57,178 @@ jobs:
             [[ "$saw_change" == "true" ]]
           }
 
-          docs_only_fixture="$RUNNER_TEMP/docs-only-paths.txt"
-          mixed_fixture="$RUNNER_TEMP/mixed-paths.txt"
-          empty_fixture="$RUNNER_TEMP/empty-paths.txt"
+          classify_pr_merge() {
+            local repo="$1"
+            local base_sha="$2"
+            local merge_sha="$3"
+            local pr_head_sha="$4"
+            local changed_paths="$5"
+            local parents
+            local first_parent
+            local second_parent
+            local extra_parent
 
-          printf '%s\n' README.md docs/PENDING_MASTER.md LICENSE .github/CODEOWNERS > "$docs_only_fixture"
-          printf '%s\n' README.md .github/workflows/ci.yml > "$mixed_fixture"
-          : > "$empty_fixture"
+            [[ -n "$base_sha" && -n "$merge_sha" && -n "$pr_head_sha" ]] || return 2
 
-          if ! classify_paths "$docs_only_fixture"; then
-            echo "::error::Classifier regression: documentation-only fixture must be lightweight."
-            exit 1
-          fi
-          if classify_paths "$mixed_fixture"; then
-            echo "::error::Classifier regression: mixed fixture must use heavy CI."
-            exit 1
-          fi
-          if classify_paths "$empty_fixture"; then
-            echo "::error::Classifier regression: empty/ambiguous fixture must use heavy CI."
-            exit 1
-          fi
+            parents="$(git -C "$repo" show -s --format=%P "$merge_sha" 2>/dev/null)" || return 2
+            read -r first_parent second_parent extra_parent <<< "$parents"
+            [[ -n "$first_parent" && -n "$second_parent" && -z "${extra_parent:-}" ]] || return 2
+            [[ "$first_parent" == "$base_sha" && "$second_parent" == "$pr_head_sha" ]] || return 2
+            git -C "$repo" cat-file -e "${base_sha}^{commit}" 2>/dev/null || return 2
+            git -C "$repo" diff --name-only --no-renames "$base_sha" "$merge_sha" > "$changed_paths" || return 2
+
+            classify_paths "$changed_paths"
+          }
+
+          run_classifier_regressions() {
+            local fixture_repo="$RUNNER_TEMP/ci-classifier-regression"
+            local changed_paths="$RUNNER_TEMP/ci-classifier-regression-paths.txt"
+            local root_sha
+            local workflow_head
+            local workflow_base
+            local workflow_merge
+            local current_docs_head
+            local current_docs_base
+            local current_docs_merge
+            local lagged_head
+            local lagged_base
+            local lagged_merge
+            local direct_wrong_paths="$RUNNER_TEMP/direct-base-head-paths.txt"
+            local mixed_fixture="$RUNNER_TEMP/mixed-paths.txt"
+            local empty_fixture="$RUNNER_TEMP/empty-paths.txt"
+            local rc
+
+            rm -rf "$fixture_repo"
+            git init -q "$fixture_repo"
+            git -C "$fixture_repo" config user.name "CI Classifier Regression"
+            git -C "$fixture_repo" config user.email "ci-classifier@example.invalid"
+            mkdir -p "$fixture_repo/docs"
+            printf '%s\n' "# Seed" > "$fixture_repo/README.md"
+            printf '%s\n' "stale governance" > "$fixture_repo/docs/PENDING_MASTER.md"
+            git -C "$fixture_repo" add README.md docs/PENDING_MASTER.md
+            git -C "$fixture_repo" commit -q -m seed
+            root_sha="$(git -C "$fixture_repo" rev-parse HEAD)"
+
+            # 1. A PR changing this workflow must stay HEAVY.
+            git -C "$fixture_repo" switch -q -c workflow-pr "$root_sha"
+            mkdir -p "$fixture_repo/.github/workflows"
+            printf '%s\n' "name: workflow change" > "$fixture_repo/.github/workflows/ci.yml"
+            git -C "$fixture_repo" add .github/workflows/ci.yml
+            git -C "$fixture_repo" commit -q -m workflow
+            workflow_head="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" switch -q -c workflow-base "$root_sha"
+            workflow_base="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" merge -q --no-ff --no-edit workflow-pr
+            workflow_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
+            if classify_pr_merge "$fixture_repo" "$workflow_base" "$workflow_merge" "$workflow_head" "$changed_paths"; then
+              echo "::error::Classifier regression: workflow PR must use heavy CI."
+              return 1
+            else
+              rc=$?
+              [[ "$rc" -eq 1 ]] || { echo "::error::Workflow fixture classification failed unexpectedly."; return 1; }
+            fi
+
+            # 2. Documentation-only PR on the current base must be LIGHT.
+            git -C "$fixture_repo" switch -q -c docs-current-pr "$root_sha"
+            printf '%s\n' "docs update" >> "$fixture_repo/README.md"
+            git -C "$fixture_repo" add README.md
+            git -C "$fixture_repo" commit -q -m docs-current
+            current_docs_head="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" switch -q -c docs-current-base "$root_sha"
+            current_docs_base="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" merge -q --no-ff --no-edit docs-current-pr
+            current_docs_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
+            if ! classify_pr_merge "$fixture_repo" "$current_docs_base" "$current_docs_merge" "$current_docs_head" "$changed_paths"; then
+              echo "::error::Classifier regression: docs-only PR on current base must be lightweight."
+              return 1
+            fi
+
+            # 3. Documentation-only PR whose branch lagged behind main must still be LIGHT.
+            git -C "$fixture_repo" switch -q -c lagged-base "$root_sha"
+            mkdir -p "$fixture_repo/.github/workflows"
+            printf '%s\n' "name: main-only advancement" > "$fixture_repo/.github/workflows/main-only.yml"
+            git -C "$fixture_repo" add .github/workflows/main-only.yml
+            git -C "$fixture_repo" commit -q -m main-advanced
+            lagged_base="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" switch -q -c lagged-pr "$root_sha"
+            git -C "$fixture_repo" rm -q docs/PENDING_MASTER.md
+            git -C "$fixture_repo" commit -q -m docs-delete
+            lagged_head="$(git -C "$fixture_repo" rev-parse HEAD)"
+            git -C "$fixture_repo" switch -q lagged-base
+            git -C "$fixture_repo" merge -q --no-ff --no-edit lagged-pr
+            lagged_merge="$(git -C "$fixture_repo" rev-parse HEAD)"
+            if ! classify_pr_merge "$fixture_repo" "$lagged_base" "$lagged_merge" "$lagged_head" "$changed_paths"; then
+              echo "::error::Classifier regression: lagged docs-only PR must be lightweight."
+              return 1
+            fi
+            git -C "$fixture_repo" diff --name-only --no-renames "$lagged_base" "$lagged_head" > "$direct_wrong_paths"
+            if classify_paths "$direct_wrong_paths"; then
+              echo "::error::Classifier regression: direct base-vs-historical-head fixture should expose main-only drift as heavy."
+              return 1
+            fi
+
+            # 4. Mixed changes must be HEAVY.
+            printf '%s\n' README.md app/src/main/kotlin/example.kt > "$mixed_fixture"
+            if classify_paths "$mixed_fixture"; then
+              echo "::error::Classifier regression: mixed fixture must use heavy CI."
+              return 1
+            fi
+
+            # 5. Empty/ambiguous changes must be HEAVY.
+            : > "$empty_fixture"
+            if classify_paths "$empty_fixture"; then
+              echo "::error::Classifier regression: empty/ambiguous fixture must use heavy CI."
+              return 1
+            fi
+
+            # 6. Merge-ref verification/classification failure must not produce LIGHT.
+            if classify_pr_merge "$fixture_repo" "$root_sha" "$lagged_merge" "$lagged_head" "$changed_paths"; then
+              echo "::error::Classifier regression: invalid merge-ref shape must not be lightweight."
+              return 1
+            else
+              rc=$?
+              [[ "$rc" -eq 2 ]] || { echo "::error::Invalid merge-ref fixture did not fail classification as expected."; return 1; }
+            fi
+
+            # 7. push/workflow_dispatch are initialized HEAVY and never enter PR classification.
+            for regression_event in push workflow_dispatch; do
+              local regression_run_heavy=true
+              if [[ "$regression_event" == "pull_request" ]]; then
+                regression_run_heavy=false
+              fi
+              [[ "$regression_run_heavy" == "true" ]] || { echo "::error::Non-PR event must default to heavy CI."; return 1; }
+            done
+
+            echo "Classifier regressions PASS: workflow=HEAVY, docs-current=LIGHT, docs-lagged=LIGHT, mixed=HEAVY, empty=HEAVY, failure=HEAVY, non-PR=HEAVY."
+          }
+
+          run_classifier_regressions
 
           run_heavy=true
           reason="non-PR event defaults to heavy CI"
 
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            if [[ -z "${BASE_SHA:-}" || -z "${HEAD_SHA:-}" ]]; then
-              reason="missing PR base/head SHA; fail closed to heavy CI"
+            if [[ -z "${BASE_SHA:-}" || -z "${PR_HEAD_SHA:-}" || -z "${EVENT_SHA:-}" ]]; then
+              reason="missing PR base/head/merge SHA; fail closed to heavy CI"
             else
-              changed_paths="$RUNNER_TEMP/changed-paths.txt"
-              if git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA" \
-                && git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$changed_paths"; then
-                if classify_paths "$changed_paths"; then
-                  run_heavy=false
-                  reason="unequivocally documentation-only PR"
-                else
-                  reason="mixed, non-documentation, or empty PR diff; heavy CI required"
-                fi
+              checkout_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+              if [[ -z "$checkout_sha" || "$checkout_sha" != "$EVENT_SHA" ]]; then
+                reason="checkout is not the event merge SHA; fail closed to heavy CI"
+              elif ! git fetch --no-tags --depth=1 origin "$BASE_SHA"; then
+                reason="PR base fetch failed; fail closed to heavy CI"
               else
-                reason="PR diff classification failed; fail closed to heavy CI"
+                changed_paths="$RUNNER_TEMP/changed-paths.txt"
+                if classify_pr_merge "$GITHUB_WORKSPACE" "$BASE_SHA" "$checkout_sha" "$PR_HEAD_SHA" "$changed_paths"; then
+                  run_heavy=false
+                  reason="unequivocally documentation-only effective PR contribution"
+                else
+                  rc=$?
+                  if [[ "$rc" -eq 1 ]]; then
+                    reason="mixed, non-documentation, or empty effective PR diff; heavy CI required"
+                  else
+                    reason="merge-ref verification or PR diff classification failed; fail closed to heavy CI"
+                  fi
+                fi
               fi
             fi
           fi
