@@ -112,7 +112,7 @@ class UnsavedChangesGuardTest {
         assertTrue(profile.contains("onSection(RiderSection.PERMISSIONS)"))
         assertTrue(profile.contains("onSection(RiderSection.SUPPORT)"))
         assertTrue(profile.contains("No se pudo actualizar el alias."))
-        assertTrue(profile.contains("La contraseña actual no es correcta."))
+        assertTrue(profile.contains("No se pudo actualizar la contraseña. Revisá la contraseña actual e intentá nuevamente."))
     }
 
     @Test
@@ -162,7 +162,7 @@ class UnsavedChangesGuardTest {
 
         val profile = operations.substringAfter("private fun RiderProfileView(").substringBefore("internal fun AdminShiftsLegacyScreen(")
         assertTrue(profile.contains("No se pudo actualizar el alias."))
-        assertTrue(profile.contains("La contraseña actual no es correcta."))
+        assertTrue(profile.contains("No se pudo actualizar la contraseña. Revisá la contraseña actual e intentá nuevamente."))
         assertFalse(profile.contains("No se pudo actualizar el alias.\"\n            }\n            onEdit("))
     }
 
