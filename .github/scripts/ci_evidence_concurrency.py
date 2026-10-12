@@ -82,8 +82,8 @@ def assert_workflow_contracts() -> None:
 
 
 def assert_resolved_semantics() -> None:
-    # Visible workflow names are deliberately different between consecutive HEADs.
-    # They are not inputs to the contractual PR concurrency identity.
+    # Rename-stability is structural: visible workflow names deliberately vary here,
+    # but they are never inputs to the contractual concurrency identity.
     ci_visible_name_old = "Android CI"
     ci_visible_name_new = "Android CI renamed"
     assert ci_visible_name_old != ci_visible_name_new
