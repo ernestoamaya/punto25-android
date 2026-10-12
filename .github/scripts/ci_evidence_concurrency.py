@@ -7,11 +7,11 @@ CODEQL = ROOT / ".github/workflows/codeql.yml"
 
 EXPECTED = {
     CI: (
-        "android-ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",
+        "android-ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",
         "${{ github.event_name == 'pull_request' }}",
     ),
     CODEQL: (
-        "codeql-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",
+        "codeql-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",
         "${{ github.event_name == 'pull_request' }}",
     ),
 }
@@ -40,7 +40,7 @@ def concurrency_values(path: Path) -> tuple[str, str]:
     return block["group"], block["cancel-in-progress"]
 
 
-def resolved(prefix: str, workflow: str, event: str, run_id: int, pr_number: int | None = None) -> tuple[str, bool]:
+def resolved(namespace: str, event: str, run_id: int, pr_number: int | None = None) -> tuple[str, bool]:
     if event == "pull_request":
         assert pr_number is not None
         identity = f"pr-{pr_number}"
@@ -48,13 +48,16 @@ def resolved(prefix: str, workflow: str, event: str, run_id: int, pr_number: int
     else:
         identity = f"run-{run_id}"
         cancel = False
-    return f"{prefix}-{workflow}-{identity}", cancel
+    return f"{namespace}-{identity}", cancel
 
 
 def assert_workflow_contracts() -> None:
     for path, expected in EXPECTED.items():
         actual = concurrency_values(path)
         assert actual == expected, f"{path}: unexpected concurrency contract: {actual!r}"
+        assert "${{ github.workflow }}" not in actual[0], (
+            f"{path}: PR concurrency identity must not depend on mutable workflow name metadata"
+        )
 
     ci_text = CI.read_text(encoding="utf-8")
     codeql_text = CODEQL.read_text(encoding="utf-8")
@@ -79,35 +82,43 @@ def assert_workflow_contracts() -> None:
 
 
 def assert_resolved_semantics() -> None:
-    ci_pr_old = resolved("android-ci", "Android CI", "pull_request", 1001, 77)
-    ci_pr_new = resolved("android-ci", "Android CI", "pull_request", 1002, 77)
-    ci_other_pr = resolved("android-ci", "Android CI", "pull_request", 1003, 78)
+    # Visible workflow names are deliberately different between consecutive HEADs.
+    # They are not inputs to the contractual PR concurrency identity.
+    ci_visible_name_old = "Android CI"
+    ci_visible_name_new = "Android CI renamed"
+    assert ci_visible_name_old != ci_visible_name_new
+    ci_pr_old = resolved("android-ci", "pull_request", 1001, 77)
+    ci_pr_new = resolved("android-ci", "pull_request", 1002, 77)
+    ci_other_pr = resolved("android-ci", "pull_request", 1003, 78)
     assert ci_pr_old == ci_pr_new
     assert ci_pr_old[1] is True
     assert ci_other_pr[0] != ci_pr_old[0]
 
-    ci_push_a = resolved("android-ci", "Android CI", "push", 2001)
-    ci_push_b = resolved("android-ci", "Android CI", "push", 2002)
-    ci_manual = resolved("android-ci", "Android CI", "workflow_dispatch", 2003)
+    ci_push_a = resolved("android-ci", "push", 2001)
+    ci_push_b = resolved("android-ci", "push", 2002)
+    ci_manual = resolved("android-ci", "workflow_dispatch", 2003)
     assert len({ci_push_a[0], ci_push_b[0], ci_manual[0]}) == 3
     assert all(cancel is False for _, cancel in (ci_push_a, ci_push_b, ci_manual))
 
-    codeql_pr_old = resolved("codeql", "CodeQL Advanced", "pull_request", 3001, 77)
-    codeql_pr_new = resolved("codeql", "CodeQL Advanced", "pull_request", 3002, 77)
+    codeql_visible_name_old = "CodeQL Advanced"
+    codeql_visible_name_new = "CodeQL Advanced renamed"
+    assert codeql_visible_name_old != codeql_visible_name_new
+    codeql_pr_old = resolved("codeql", "pull_request", 3001, 77)
+    codeql_pr_new = resolved("codeql", "pull_request", 3002, 77)
     assert codeql_pr_old == codeql_pr_new
     assert codeql_pr_old[1] is True
 
-    codeql_push_a = resolved("codeql", "CodeQL Advanced", "push", 4001)
-    codeql_push_b = resolved("codeql", "CodeQL Advanced", "push", 4002)
-    codeql_schedule_a = resolved("codeql", "CodeQL Advanced", "schedule", 5001)
-    codeql_schedule_b = resolved("codeql", "CodeQL Advanced", "schedule", 5002)
+    codeql_push_a = resolved("codeql", "push", 4001)
+    codeql_push_b = resolved("codeql", "push", 4002)
+    codeql_schedule_a = resolved("codeql", "schedule", 5001)
+    codeql_schedule_b = resolved("codeql", "schedule", 5002)
     assert len({codeql_push_a[0], codeql_push_b[0], codeql_schedule_a[0], codeql_schedule_b[0]}) == 4
     assert all(cancel is False for _, cancel in (codeql_push_a, codeql_push_b, codeql_schedule_a, codeql_schedule_b))
     assert codeql_push_a[0] != codeql_schedule_a[0]
 
-    # Workflow namespaces are independent even if GitHub ever reuses a numeric run id across workflows.
-    same_run_ci = resolved("android-ci", "Android CI", "push", 9001)
-    same_run_codeql = resolved("codeql", "CodeQL Advanced", "push", 9001)
+    # Workflow namespaces remain independent even if GitHub ever reuses a numeric run id across workflows.
+    same_run_ci = resolved("android-ci", "push", 9001)
+    same_run_codeql = resolved("codeql", "push", 9001)
     assert same_run_ci[0] != same_run_codeql[0]
 
 
@@ -115,6 +126,6 @@ if __name__ == "__main__":
     assert_workflow_contracts()
     assert_resolved_semantics()
     print(
-        "CI evidence concurrency regressions PASS: same-PR heads share a cancellable group; "
+        "CI evidence concurrency regressions PASS: same-PR heads retain stable cancellable groups across workflow-name renames; "
         "non-PR runs use unique run groups with cancellation disabled; CodeQL push/schedule remain independent."
     )
