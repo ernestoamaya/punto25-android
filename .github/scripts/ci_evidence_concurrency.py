@@ -105,6 +105,11 @@ def assert_resolved_semantics() -> None:
     assert all(cancel is False for _, cancel in (codeql_push_a, codeql_push_b, codeql_schedule_a, codeql_schedule_b))
     assert codeql_push_a[0] != codeql_schedule_a[0]
 
+    # Workflow namespaces are independent even if GitHub ever reuses a numeric run id across workflows.
+    same_run_ci = resolved("android-ci", "Android CI", "push", 9001)
+    same_run_codeql = resolved("codeql", "CodeQL Advanced", "push", 9001)
+    assert same_run_ci[0] != same_run_codeql[0]
+
 
 if __name__ == "__main__":
     assert_workflow_contracts()
