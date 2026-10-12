@@ -252,5 +252,14 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 | REG-P23A2-ADMIN-RECOVERY-CAP-001 | Admin genera recovery capability exclusivamente por backend autorizado. | `RiderAuthSessionP23A2Test.REG-P23A2-ADMIN-RECOVERY-CAP-001…` |
 | REG-P23A2-CAPABILITY-NOPERSIST-001 | Cache local Rider no contiene capability ni password y no los convierte en autoridad persistente. | `RiderAuthSessionP23A2Test.REG-P23A2-CAPABILITY-NOPERSIST-001…` |
 | REG-P23A2-NO-P24-001 | El gateway Rider P23-A2 no incorpora autoridad backend de pedidos, asignación, pricing, pagos ni balance reservada a P24. | `RiderAuthSessionP23A2Test.REG-P23A2-NO-P24-001…` |
+| REG-CI-DOCS-FILTER-001 | Sólo cambios documentales inequívocos pueden evitar el trabajo Android pesado; cambios de workflow/build/código/test/config permanecen HEAVY y el classifier falla cerrado. | `.github/workflows/ci.yml` — classifier/regresiones embebidas |
+| REG-CI-TEST-AUTHORITY-001 | Android CI conserva `test-and-build` como autoridad ordinaria y ejecuta `:app:testDebugUnitTest :app:assembleDebug` en HEAVY. | `.github/scripts/ci_evidence_concurrency.py` + Android CI real |
+| REG-CODEQL-KOTLIN-COVERAGE-001 | CodeQL conserva `java-kotlin` con `build-mode: manual` y compila app + fuentes unit-test Kotlin antes del análisis. | `.github/scripts/ci_evidence_concurrency.py` + CodeQL real |
+| REG-PACKAGING-UNCHANGED-001 | P26-A no modifica Alpha APK, Physical APK, firma, provenance ni contratos de artifact. | Diff P26-A contra base exacta + inspección de changed files |
+| REG-CI-EVIDENCE-PR-SUPERSEDE-001 | HEADs sucesivos del mismo PR comparten grupo estable por número de PR; el HEAD nuevo cancela/supersede evidencia del HEAD viejo. | `.github/scripts/ci_evidence_concurrency.py` + E2E PR #48 con HEADs consecutivos |
+| REG-CI-EVIDENCE-NONPR-PRESERVE-001 | Cada run Android CI no-PR usa grupo propio por `run_id` y `cancel-in-progress=false`, evitando reemplazo/cancelación entre pushes/manuales independientes. | `.github/scripts/ci_evidence_concurrency.py` |
+| REG-CODEQL-EVIDENCE-INDEPENDENCE-001 | Cada CodeQL no-PR usa grupo propio por `run_id`; push y schedule son independientes y no se cancelan/reemplazan entre sí. | `.github/scripts/ci_evidence_concurrency.py` + runs reales push/schedule disponibles |
+| REG-CI-REQUIRED-GATE-001 | El job/check estable `test-and-build` permanece intacto y sigue siendo el único required status check observado en `Protect main`. | `.github/scripts/ci_evidence_concurrency.py` + ruleset remoto revalidado |
+| REG-CODEQL-COVERAGE-PRESERVE-001 | CodeQL conserva `actions` + `java-kotlin`, schedule semanal, build manual Kotlin/Java y análisis efectivo sobre el HEAD final. | `.github/scripts/ci_evidence_concurrency.py` + CodeQL real final |
 
 Los nuevos bugs de Clase A deben incorporar, cuando sea técnicamente razonable, un `REG-*` y un test permanente antes de cerrar la tanda que los corrige.
