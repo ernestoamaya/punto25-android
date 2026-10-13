@@ -196,7 +196,7 @@ class Punto25ThemeFoundationsTest {
             palette.borderSubtle,
             palette.borderStrong
         )
-        assertEquals(expected.map(::Color), actual)
+        assertEquals(expected.map { Color(it) }, actual)
     }
 
     private fun assertSemantic(semantic: Punto25SemanticColors, expected: List<Triple<Long, Long, Long>>) {
