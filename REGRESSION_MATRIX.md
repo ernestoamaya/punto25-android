@@ -4,6 +4,13 @@ Esta matriz vincula invariantes críticos con tests ejecutables. Los tests son l
 
 | ID | Invariante | Test ejecutable |
 |---|---|---|
+| REG-P11-D1-COLOR-TOKENS-001 | Las foundations Light/Dark conservan exactamente los tokens frozen, incluido amber Light `#9A630F`, superficies, bordes y roles semánticos. | `Punto25ThemeFoundationsTest.REG-P11-D1-COLOR-TOKENS-001…` |
+| REG-P11-D1-DANGER-CONTRAST-001 | Danger Light conserva `fg=#A84D4D`, `container=#F4D9D7`, `on=#542323`; texto normal sobre container usa `danger.on` y mantiene contraste ≥ 4.5:1. | `Punto25ThemeFoundationsTest.REG-P11-D1-DANGER-CONTRAST-001…` |
+| REG-P11-D1-TYPOGRAPHY-001 | La escala tipográfica frozen usa exclusivamente la fuente del sistema/Roboto con tamaños, line-height y pesos exactos, incluido Action y Money/Data. | `Punto25ThemeFoundationsTest.REG-P11-D1-TYPOGRAPHY-001…` |
+| REG-P11-D1-GEOMETRY-001 | Spacing, radios, elevación, touch targets, alturas, tamaños de icono y motion coinciden exactamente con Visual Freeze. | `Punto25ThemeFoundationsTest.REG-P11-D1-GEOMETRY-001…` |
+| REG-P11-D1-THEME-MODE-001 | `ThemeMode` sigue siendo exactamente SYSTEM/LIGHT/DARK, conserva default SYSTEM y persistencia `theme_mode` por nombre, sin migración ni nuevo modo. | `Punto25ThemeFoundationsTest.REG-P11-D1-THEME-MODE-001…` |
+| REG-P11-D1-NO-FUNCTIONAL-CHANGE-001 | El wiring raíz conserva `Surface(fillMaxSize())` y la misma navegación; D1 sólo agrega ColorScheme/Typography/Shapes frozen. | `Punto25ThemeFoundationsTest.REG-P11-D1-NO-FUNCTIONAL-CHANGE-001…` + diff D1 contra base exacta |
+| REG-P11-D1-SCOPE-001 | Las foundations permanecen puramente presentacionales, sin controller, auth, mapas, pagos, navegación, persistencia ni migración masiva de pantallas/componentes. | `Punto25ThemeFoundationsTest.REG-P11-D1-SCOPE-001…` + inspección de changed files |
 | REG-IDENTITY-001 | Un Cliente nunca obtiene pedidos de otro Cliente por coincidencias débiles. | `CustomerOrderOwnershipTest.differentCustomerNeverMatchesEvenWithSameVisibleName` |
 | REG-HISTORY-001 | Los alias Alpha `CLI-/DEV-` recuperan historial sólo cuando corresponden al mismo teléfono verificado. | `CustomerOrderOwnershipTest.legacyCliIdMatchesVerifiedCurrentCustomer`, `previousDevIdMatchesVerifiedGoogleCustomerWithSameNumber` |
 | REG-CUSTOMER-REG-GOOGLE-001 | Google válido confirma alta con WhatsApp no verificado. | `CustomerRegistrationPolicyTest.googleRegistrationWithoutWhatsappSucceedsAndDoesNotMutateVerification` |

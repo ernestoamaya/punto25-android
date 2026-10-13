@@ -41,56 +41,6 @@ private enum class Screen {
     RIDERS, RIDER_ADMIN_VIEW, RIDER_WORKSPACE, LOCATION_PICKER
 }
 
-private val MandadosLightColors = lightColorScheme(
-    primary = Color(0xFF006B5E),
-    onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFD8EEE8),
-    onPrimaryContainer = Color(0xFF0A332C),
-    secondary = Color(0xFF536B64),
-    onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFDDE7E2),
-    onSecondaryContainer = Color(0xFF253D36),
-    tertiary = Color(0xFFB87916),
-    onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFF6E1B6),
-    onTertiaryContainer = Color(0xFF4C350B),
-    background = Color(0xFFF4F1E9),
-    onBackground = Color(0xFF202522),
-    surface = Color(0xFFFCF8F0),
-    onSurface = Color(0xFF202522),
-    surfaceVariant = Color(0xFFE9E3D8),
-    onSurfaceVariant = Color(0xFF565C57),
-    outline = Color(0xFF7A817C),
-    error = Color(0xFFA84D4D),
-    errorContainer = Color(0xFFF4D9D7),
-    onErrorContainer = Color(0xFF542323)
-)
-
-private val MandadosDarkColors = darkColorScheme(
-    primary = Color(0xFF62D7C3),
-    onPrimary = Color(0xFF00382F),
-    primaryContainer = Color(0xFF174C43),
-    onPrimaryContainer = Color(0xFFD2F5ED),
-    secondary = Color(0xFFAFCBC2),
-    onSecondary = Color(0xFF19372F),
-    secondaryContainer = Color(0xFF29453D),
-    onSecondaryContainer = Color(0xFFD2E8E1),
-    tertiary = Color(0xFFF1B44C),
-    onTertiary = Color(0xFF442B00),
-    tertiaryContainer = Color(0xFF5F430F),
-    onTertiaryContainer = Color(0xFFFFE7B2),
-    background = Color(0xFF0D1513),
-    onBackground = Color(0xFFE3ECE8),
-    surface = Color(0xFF14201D),
-    onSurface = Color(0xFFE3ECE8),
-    surfaceVariant = Color(0xFF20302C),
-    onSurfaceVariant = Color(0xFFBBC9C4),
-    outline = Color(0xFF7D918A),
-    error = Color(0xFFE18B86),
-    errorContainer = Color(0xFF542D2D),
-    onErrorContainer = Color(0xFFFFDAD7)
-)
-
 private val ReceptionEnabledGreenLight = Color(0xFF146C2E)
 private val ReceptionEnabledGreenDark = Color(0xFF6DD58C)
 private val ReceptionPausedRedLight = Color(0xFFB3261E)
@@ -109,7 +59,11 @@ fun MandadosApp() {
         ThemeMode.DARK -> true
     }
 
-    MaterialTheme(colorScheme = if (useDark) MandadosDarkColors else MandadosLightColors) {
+    MaterialTheme(
+        colorScheme = if (useDark) MandadosDarkColors else MandadosLightColors,
+        typography = Punto25Typography,
+        shapes = Punto25Shapes
+    ) {
         Surface(modifier = Modifier.fillMaxSize()) {
             MandadosNavigation(controller)
         }
